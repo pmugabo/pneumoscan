@@ -255,12 +255,12 @@ clinicians shaping the workflow before it is built into one.
 
 ### Interface mockups
 
-![Upload](docs/figma-upload.png)
-![Cleared](docs/figma-cleared.png)
-![Flagged urgent](docs/figma-flagged.png)
-![Escalated](docs/figma-escalated.png)
-![Rejected](docs/figma-rejected.png)
-![API](docs/figma-api.png)
+![Upload](docs/figma-Upload.png)
+![Cleared](docs/figma-Cleared.png)
+![Flagged urgent](docs/figma-Flagged.png)
+![Escalated](docs/figma-Escalated.png)
+![Rejected](docs/figma-Rejected.png)
+![API](docs/figma-API.png)
 
 ### Screenshots of the running app
 
