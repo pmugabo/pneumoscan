@@ -3,11 +3,10 @@
 Autonomous chest X-ray triage with a confidence gate.
 
 **Repository:** https://github.com/pmugabo/pneumoscan
-**Video demo:**
+**Video demo:** https://youtu.be/uvaLALHW7H8 
 **Figma designs:** https://www.figma.com/design/t6tiMNBoyDIepkTpqvkuKu/Pneumoscan?node-id=7-2&t=GP7jf4vuSEDoHzb9-1
 **Author:** Mugabo Patricie 
 **Supervisor:** Emmanuel Adjei
-
 
 
 ## Description
@@ -40,7 +39,7 @@ and referral stay with the clinician.
 
 **What the product must do** (from the capstone proposal):
 
-| # | Requirement | Where it is met |
+| # | Requirement | Where it is addressed |
 |---|---|---|
 | R1 | Classify a paediatric chest X-ray as normal or pneumonia | `models/efficientnet_b0.pt`, `backend/inference.py` |
 | R2 | Return a calibrated confidence, not a raw score | Temperature scaling, `models/gate_params.json` |
@@ -186,7 +185,7 @@ thresholds have loaded. Stop it with Ctrl+C.
 | http://127.0.0.1:8000/docs | Swagger UI |
 | http://127.0.0.1:8000/openapi.json | OpenAPI schema (import into Postman) |
 
-**Try it:** `samples/` holds public test radiographs (normal and pneumonia) plus `non-xray.png`, which the gate should reject. Also make sure the folder really has four X-rays. The Finder list was cut off at the bottom.
+**Try it:** `samples/` holds public test radiographs (normal and pneumonia) plus `non-xray.png`, which the gate should reject. 
 
 ### Model files
 
@@ -279,7 +278,7 @@ frontend/index.html    clinician interface (no build step)
 notebooks/             training pipeline (Kaggle notebook with saved outputs)
 models/                gate parameters, gate statistics and EfficientNetB0 weights
 results/               model comparison, gate results, charts
-samples/               four public test radiographs for trying the app
+samples/               public test radiographs for trying the app
 docs/                  Figma mockups and screenshots of the running app
 ```
 
