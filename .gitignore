@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+pneumoscan.db
+models/*.pt
+models/*.npz
+.DS_Store

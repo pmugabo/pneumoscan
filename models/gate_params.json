@@ -1,0 +1,17 @@
+{
+  "selected_model": "efficientnet_b0",
+  "val_auc_by_model": {
+    "small_cnn": 0.9857003911181011,
+    "resnet50": 0.9987273141154316,
+    "densenet121": 0.9986186701984562,
+    "efficientnet_b0": 0.9987324876352875
+  },
+  "temperature": 1.293449878692627,
+  "ece_before": 0.007652980739739838,
+  "ece_after": 0.005780420354919998,
+  "confidence_threshold": 0.9754999876022339,
+  "distance_threshold": 2849.045141259368,
+  "retention_on_validation": 0.95,
+  "target_sensitivity": 0.9,
+  "note": "fitted on validation only, then frozen"
+}

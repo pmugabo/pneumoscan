@@ -1,0 +1,35 @@
+{
+  "selected_model": "efficientnet_b0",
+  "ungated_all_images": {
+    "n": 618,
+    "threshold": 0.9754999876022339,
+    "sensitivity": 0.9457364341085271,
+    "specificity": 0.8701298701298701,
+    "precision": 0.9242424242424242,
+    "f1": 0.9348659003831418,
+    "accuracy": 0.9174757281553398,
+    "auc": 0.9645401970983367,
+    "tp": 366,
+    "tn": 201,
+    "fp": 30,
+    "fn": 21
+  },
+  "gated_accepted_only": {
+    "n": 457,
+    "threshold": 0.9754999876022339,
+    "sensitivity": 1.0,
+    "specificity": 0.7058823529411765,
+    "precision": 0.922077922077922,
+    "f1": 0.9594594594594594,
+    "accuracy": 0.9343544857768052,
+    "auc": 0.9462855564761116,
+    "tp": 355,
+    "tn": 72,
+    "fp": 30,
+    "fn": 0
+  },
+  "accepted": 457,
+  "escalated_low_confidence": 147,
+  "rejected_out_of_distribution": 14,
+  "autonomy_rate": 0.7394822006472492
+}

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PneumoScan — chest X-ray triage</title>
+<style>
+  :root{
+    --ink:#11161d; --muted:#5d6b7a; --line:#dfe5ec; --bg:#f5f7fa; --panel:#fff;
+    --navy:#2f4b7c; --green:#0f7a46; --red:#b3261e; --amber:#9a6400;
+    --green-bg:#e7f4ed; --red-bg:#fbe9e7; --amber-bg:#fdf3e0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:var(--bg);color:var(--ink)}
+  header{background:var(--navy);color:#fff;padding:18px 24px}
+  header h1{margin:0;font-size:19px;letter-spacing:.2px}
+  header p{margin:4px 0 0;font-size:13px;opacity:.85}
+  .banner{background:#fff5d6;border-bottom:1px solid #e8d79a;padding:9px 24px;
+          font-size:13px;color:#6b5200}
+  main{max-width:1020px;margin:0 auto;padding:24px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:860px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px}
+  h2{margin:0 0 14px;font-size:15px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
+  .drop{display:block;border:2px dashed #c4cedb;border-radius:10px;padding:38px 18px;text-align:center;
+        cursor:pointer;transition:.15s;color:var(--muted)}
+  .drop:hover,.drop.over{border-color:var(--navy);background:#f2f6fc;color:var(--navy)}
+  .drop strong{display:block;color:var(--ink);margin-bottom:4px}
+  input[type=file]{display:none}
+  button{font:inherit;border:0;border-radius:7px;padding:11px 18px;cursor:pointer}
+  .primary{background:var(--navy);color:#fff}
+  .primary:disabled{background:#9aa8bb;cursor:not-allowed}
+  .ghost{background:#eef2f7;color:var(--ink);padding:7px 13px;font-size:14px}
+  .preview{margin-top:16px;display:none}
+  .preview img{width:100%;border-radius:8px;border:1px solid var(--line)}
+  .state{border-radius:9px;padding:16px 18px;margin-bottom:16px}
+  .state h3{margin:0 0 4px;font-size:20px}
+  .state p{margin:0;font-size:14px}
+  .CLEARED{background:var(--green-bg);border-left:5px solid var(--green)}
+  .CLEARED h3{color:var(--green)}
+  .FLAGGED_URGENT{background:var(--red-bg);border-left:5px solid var(--red)}
+  .FLAGGED_URGENT h3{color:var(--red)}
+  .ESCALATED,.REJECTED{background:var(--amber-bg);border-left:5px solid var(--amber)}
+  .ESCALATED h3,.REJECTED h3{color:var(--amber)}
+  .meter{height:9px;background:#e8edf4;border-radius:5px;overflow:hidden;margin:7px 0 3px}
+  .meter span{display:block;height:100%;background:var(--navy)}
+  .rows{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px}
+  .rows td{padding:7px 0;border-bottom:1px solid var(--line)}
+  .rows td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+  .muted{color:var(--muted);font-size:13px}
+  .empty{color:var(--muted);text-align:center;padding:48px 0;font-size:14px}
+  .spin{width:22px;height:22px;border:3px solid #dde4ee;border-top-color:var(--navy);
+        border-radius:50%;animation:r .8s linear infinite;margin:40px auto}
+  @keyframes r{to{transform:rotate(360deg)}}
+  footer{max-width:1020px;margin:0 auto;padding:8px 24px 36px;color:var(--muted);font-size:12px}
+  .fb{display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header>
+  <h1>PneumoScan</h1>
+  <p>Autonomous chest X-ray triage with a confidence gate</p>
+</header>
+<div class="banner" id="banner">
+  Research prototype — not a certified diagnostic device. Output is a triage
+  decision about an image, not a diagnosis or treatment plan.
+</div>
+
+<main>
+  <div class="grid">
+    <section class="panel">
+      <h2>1 · Upload radiograph</h2>
+      <label class="drop" id="drop">
+        <strong>Drop a chest X-ray here</strong>
+        JPEG or PNG, up to 10 MB
+        <input type="file" id="file" accept="image/jpeg,image/png">
+      </label>
+      <div class="preview" id="preview"><img id="thumb" alt="uploaded radiograph"></div>
+      <p style="margin-top:16px">
+        <button class="primary" id="run" disabled>Run triage</button>
+        <button class="ghost" id="clear" style="display:none">Clear</button>
+      </p>
+      <p class="muted" id="modelInfo">checking model…</p>
+    </section>
+
+    <section class="panel">
+      <h2>2 · Triage decision</h2>
+      <div id="result"><div class="empty">No image submitted yet.</div></div>
+    </section>
+  </div>
+
+  <section class="panel" style="margin-top:20px">
+    <h2>Session history</h2>
+    <div id="history"><div class="empty">No decisions recorded yet.</div></div>
+  </section>
+</main>
+<footer>
+  Images used in this prototype come from public, de-identified research datasets.
+  Every decision is logged with its model version and operating thresholds.
+</footer>
+
+<script>
+const $ = id => document.getElementById(id);
+let chosen = null, lastId = null;
+
+const LABELS = {
+  CLEARED:        {title:"Cleared",        note:"No specialist review required"},
+  FLAGGED_URGENT: {title:"Flagged urgent", note:"Prioritise clinical assessment"},
+  ESCALATED:      {title:"Escalated",      note:"Send to specialist review"},
+  REJECTED:       {title:"Rejected",       note:"Retake image or escalate"}
+};
+
+fetch("/api/model-info").then(r => r.json()).then(d => {
+  const dt = d.gate.distance_threshold;
+  $("modelInfo").textContent = d.demo_mode
+    ? "DEMO MODE — no trained model loaded; copy model files into models/"
+    : `Model ${d.architecture} · confidence ≥ ${Number(d.gate.confidence_threshold).toFixed(3)}`
+      + (dt == null ? "" : ` · distance ≤ ${Number(dt).toFixed(1)}`);
+}).catch(() => $("modelInfo").textContent = "API unreachable");
+
+const drop = $("drop");
+["dragover","dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault();
+  drop.classList.toggle("over", ev === "dragover");
+  if (ev === "drop" && e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]);
+}));
+$("file").addEventListener("change", e => e.target.files[0] && pick(e.target.files[0]));
+
+function pick(f){
+  chosen = f;
+  $("thumb").src = URL.createObjectURL(f);
+  $("preview").style.display = "block";
+  $("run").disabled = false;
+  $("clear").style.display = "inline-block";
+}
+
+$("clear").onclick = () => {
+  chosen = null; $("preview").style.display = "none";
+  $("run").disabled = true; $("clear").style.display = "none";
+  $("result").innerHTML = '<div class="empty">No image submitted yet.</div>';
+};
+
+$("run").onclick = async () => {
+  if (!chosen) return;
+  $("run").disabled = true;
+  $("result").innerHTML = '<div class="spin"></div>';
+  const body = new FormData(); body.append("file", chosen);
+  try{
+    const res = await fetch("/api/predict", {method:"POST", body});
+    if (!res.ok) throw new Error((await res.json()).detail || "request failed");
+    render(await res.json());
+    loadHistory();
+  }catch(err){
+    $("result").innerHTML = `<div class="state REJECTED"><h3>Error</h3><p>${err.message}</p></div>`;
+  }
+  $("run").disabled = false;
+};
+
+function render(d){
+  lastId = d.prediction_id;
+  const L = LABELS[d.state] || {title:d.state, note:""};
+  const pct = (d.confidence*100).toFixed(1);
+  $("result").innerHTML = `
+    <div class="state ${d.state}">
+      <h3>${L.title}</h3>
+      <p>${d.reason}</p>
+    </div>
+    ${d.heatmap_png ? `<img src="${d.heatmap_png}" style="width:100%;border-radius:8px;
+       border:1px solid var(--line)" alt="Grad-CAM heatmap">
+       <p class="muted" style="margin:6px 0 14px">Highlighted regions are those that
+       most influenced the decision — check they fall on the lung fields.</p>` : ""}
+    <table class="rows">
+      <tr><td>Predicted class</td><td>${d.label}</td></tr>
+      <tr><td>Calibrated probability of pneumonia</td><td>${d.probability.toFixed(3)}</td></tr>
+      <tr><td>Confidence</td><td>${pct}%</td></tr>
+      <tr><td>Out-of-distribution score</td><td>${d.ood_score.toFixed(1)}</td></tr>
+      <tr><td>Model version</td><td>${d.model_version}</td></tr>
+    </table>
+    <div class="meter"><span style="width:${pct}%"></span></div>
+    <p class="muted">Confidence against an operating threshold of
+      ${Number(d.thresholds.confidence ?? 0).toFixed(3)}</p>
+    <div class="fb">
+      <span class="muted">Confirmed outcome:</span>
+      <button class="ghost" onclick="sendFb('pneumonia')">Pneumonia</button>
+      <button class="ghost" onclick="sendFb('normal')">Normal</button>
+      <button class="ghost" onclick="sendFb('unknown')">Not yet known</button>
+      <span id="fbMsg" class="muted"></span>
+    </div>`;
+}
+
+async function sendFb(outcome){
+  if (!lastId) return;
+  await fetch("/api/feedback", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({prediction_id:lastId, confirmed_outcome:outcome, comment:""})
+  });
+  $("fbMsg").textContent = "recorded";
+  loadHistory();
+}
+
+async function loadHistory(){
+  const [cases, stats] = await Promise.all([
+    fetch("/api/cases?limit=10").then(r => r.json()),
+    fetch("/api/stats").then(r => r.json())
+  ]);
+  if (!cases.count){ return; }
+  const rate = stats.autonomy_rate == null ? "—" : (stats.autonomy_rate*100).toFixed(0)+"%";
+  $("history").innerHTML = `
+    <p class="muted">${stats.total} decisions · autonomy rate ${rate}
+      (share resolved without escalation)</p>
+    <table class="rows">
+      <tr><td><strong>File</strong></td><td><strong>State</strong></td></tr>
+      ${cases.cases.map(c => `<tr><td>${c.filename ?? "—"}
+        ${c.confirmed_outcome ? `<span class="muted">· confirmed ${c.confirmed_outcome}</span>` : ""}</td>
+        <td>${(LABELS[c.triage_state]||{title:c.triage_state}).title}</td></tr>`).join("")}
+    </table>`;
+}
+loadHistory();
+</script>
+</body>
+</html>
