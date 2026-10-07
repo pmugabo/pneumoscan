@@ -40,18 +40,15 @@ and referral stay with the clinician.
 
 ## What is implemented so far
 
-- [x] Data audit, duplicate detection, **patient-level** train/val split
-- [x] Three classical baselines: logistic regression, RBF-SVM, random forest
-- [x] Four deep models: small CNN from scratch, ResNet50, DenseNet121, EfficientNetB0
-- [x] Temperature scaling for calibration + Mahalanobis out-of-distribution scoring
-- [x] Confidence gate with both thresholds fitted on validation only, then frozen
-- [x] Grad-CAM explanations on every accepted decision
-- [x] FastAPI backend with Swagger UI
-- [x] Clinician web interface: upload, triage result, heatmap, outcome feedback, history
-- [x] SQLite persistence with an audit log of every decision
-- [ ] Out-of-distribution evaluation on adult / degraded / non-chest images
-- [ ] PDF report export
-- [ ] Usability testing with clinicians
+- Data audit, duplicate detection, **patient-level** train/val split
+- Three classical baselines: logistic regression, RBF-SVM, random forest
+- Four deep models: small CNN from scratch, ResNet50, DenseNet121, EfficientNetB0
+- Temperature scaling for calibration + Mahalanobis out-of-distribution scoring
+- Confidence gate with both thresholds fitted on validation only, then frozen
+- Grad-CAM explanations on every accepted decision
+- FastAPI backend with Swagger UI
+- Clinician web interface: upload, triage result, heatmap, outcome feedback, history
+- SQLite persistence with an audit log of every decision
 
 
 
