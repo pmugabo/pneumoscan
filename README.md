@@ -3,8 +3,11 @@
 Autonomous chest X-ray triage with a confidence gate.
 
 **Repository:** https://github.com/pmugabo/pneumoscan
+
 **Video demo:** https://youtu.be/uvaLALHW7H8 
+
 **Figma designs:** https://www.figma.com/design/t6tiMNBoyDIepkTpqvkuKu/Pneumoscan?node-id=7-2&t=GP7jf4vuSEDoHzb9-1
+
 **Author:** Mugabo Patricie 
 **Supervisor:** Emmanuel Adjei
 
