@@ -36,6 +36,33 @@ and referral stay with the clinician.
 
 > Research prototype, not a certified medical device.
 
+## Requirements and tools
+
+**What the product must do** (from the capstone proposal):
+
+| # | Requirement | Where it is met |
+|---|---|---|
+| R1 | Classify a paediatric chest X-ray as normal or pneumonia | `models/efficientnet_b0.pt`, `backend/inference.py` |
+| R2 | Return a calibrated confidence, not a raw score | Temperature scaling, `models/gate_params.json` |
+| R3 | Refuse inputs outside the training distribution | Mahalanobis gate, `models/gate_stats.npz` |
+| R4 | Return one of four triage states | `CLEARED`, `FLAGGED_URGENT`, `ESCALATED`, `REJECTED` |
+| R5 | Show where the model looked | Grad-CAM heatmap on accepted cases |
+| R6 | Record every decision and the confirmed outcome | SQLite `predictions` and `audit_logs` tables |
+| R7 | Be usable by a clinician with no technical training | Web interface, one upload and one click |
+| R8 | Be callable by other systems | REST API with Swagger UI at `/docs` |
+
+**Tools and why they were chosen**
+
+| Area | Tool | Reason |
+|---|---|---|
+| Model training | PyTorch, torchvision | Pretrained backbones, easy Grad-CAM hooks |
+| Classical baselines | scikit-learn, scikit-image (HOG) | Required floor for comparison |
+| Training hardware | Kaggle notebook, free T4 GPU | Zero budget |
+| Backend | FastAPI, Uvicorn | Automatic Swagger UI, typed request validation |
+| Storage | SQLite | No server to run; same schema moves to PostgreSQL |
+| Frontend | Plain HTML, CSS and JavaScript | No build step, runs from the backend |
+| Design | Figma | Mockups for each triage state |
+| Version control | Git and GitHub, VS Code | Standard workflow |
 
 
 ## What is implemented so far
@@ -98,6 +125,41 @@ degraded, non-chest images).
 ![Grad-CAM samples](results/gradcam_samples.png)
 ![Class distribution](results/class_distribution.png)
 
+# Model notebook
+
+`notebooks/` holds the training notebook with its saved outputs. It covers:
+
+1. **Data visualisation and engineering:** class distribution, image-size spread
+   (widths 428 to 2518 px, heights 140 to 2364 px), duplicate removal (32 files),
+   patient-level split. Charts are in `results/`.
+2. **Model architecture:** see below.
+3. **Initial performance metrics:** AUC, sensitivity, specificity and F1 for seven
+   models (table under Initial results), plus calibration and the gate results.
+
+### Model architecture and training
+
+All deep models output **one logit**. A sigmoid turns it into the probability of
+pneumonia, and temperature scaling then calibrates it.
+
+| Model | Architecture | Activation | Params |
+|---|---|---|---|
+| Small CNN (from scratch) | 4 blocks of Conv 3x3 (32, 64, 128, 128) + BatchNorm + MaxPool, global average pool, Dropout 0.3, Linear to 1 | ReLU | 0.24M |
+| ResNet50 | ImageNet-pretrained, final layer replaced by Linear to 1 | ReLU | 23.51M |
+| DenseNet121 | ImageNet-pretrained, classifier replaced by Linear to 1 | ReLU | 6.95M |
+| **EfficientNetB0 (deployed)** | ImageNet-pretrained, last layer replaced by Linear to 1 | SiLU | 4.01M |
+
+**Training setup**
+- Input: 224 x 224, ImageNet mean and standard deviation.
+- Augmentation (training only): rotation up to 10 degrees, shift 5%, scale 0.9 to 1.1,
+  brightness and contrast jitter 0.15.
+- Loss: binary cross-entropy with logits, with `pos_weight` to correct class imbalance.
+- Optimiser: AdamW, weight decay 1e-4, batch size 32.
+- Pretrained models, two stages: classifier head only (lr 1e-3, up to 4 epochs), then
+  the whole network fine-tuned (lr 1e-4, up to 8 epochs). The small CNN trains in
+  one stage at lr 1e-3.
+- Early stopping on validation loss, patience 3. The best-validation-loss weights are kept.
+- Classical baselines: logistic regression, RBF-SVM and random forest on HOG features
+  plus 64 x 64 downsampled pixels.
 
 
 ## Setup
@@ -247,6 +309,18 @@ EfficientNetB0 weights are about 16 MB, and the target is a decision in under 5
 seconds on CPU (to be measured). Decisions sync when a connection is available.
 This stage requires ethics approval, local validation on Rwandan radiographs, and
 clinicians shaping the workflow before it is built into one.
+
+## Using the interface
+
+The interface is one page with three areas, top to bottom:
+
+1. **Upload radiograph** (left): drop or choose a JPEG/PNG, then click **Run triage**.
+   The line below the button shows the loaded model and its thresholds.
+2. **Triage decision** (right): a coloured banner (green Cleared, red Flagged urgent,
+   amber Escalated or Rejected), the Grad-CAM heatmap, the numbers behind the decision,
+   and at the bottom the **Confirmed outcome** buttons (Pneumonia, Normal, Not yet known).
+3. **Session history** (bottom): every decision this session with its confirmed outcome,
+   and the autonomy rate.
 
 
 ## Designs
