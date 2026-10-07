@@ -125,7 +125,7 @@ degraded, non-chest images).
 ![Grad-CAM samples](results/gradcam_samples.png)
 ![Class distribution](results/class_distribution.png)
 
-# Model notebook
+## Model notebook
 
 `notebooks/` holds the training notebook with its saved outputs. It covers:
 
@@ -186,9 +186,7 @@ thresholds have loaded. Stop it with Ctrl+C.
 | http://127.0.0.1:8000/docs | Swagger UI |
 | http://127.0.0.1:8000/openapi.json | OpenAPI schema (import into Postman) |
 
-**Try it:** `samples/` holds four public test radiographs (two normal, two
-pneumonia). Upload them in the interface. To see the gate refuse, upload any
-photo or screenshot that is not a chest X-ray; it should come back `REJECTED`.
+**Try it:** `samples/` holds public test radiographs (normal and pneumonia) plus `non-xray.png`, which the gate should reject. Also make sure the folder really has four X-rays. The Finder list was cut off at the bottom.
 
 ### Model files
 
@@ -237,7 +235,7 @@ results are in `results/`.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/predict \
-  -F "file=@samples/PNEUMONIA_example.jpeg"
+  -F "file=@samples/PNEUMONIA_person1664_virus_2877.jpeg"
 ```
 
 Example response (values illustrative):
