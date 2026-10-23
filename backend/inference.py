@@ -1,6 +1,6 @@
 """PneumoScan inference engine.
 
-Loads the model trained by notebooks/PneumoScan_training.ipynb together with the
+Loads the model trained by the training notebook in notebooks/ together with the
 frozen gate parameters, then for each uploaded image produces:
 
     calibrated probability -> out-of-distribution score -> triage state -> Grad-CAM
