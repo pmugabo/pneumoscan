@@ -60,7 +60,11 @@ def generate_report(prediction_data: dict) -> BytesIO:
     # Triage decision
     story.append(Paragraph("<b>Triage Decision:</b>", styles["Heading2"]))
     story.append(Paragraph(f"<b>State:</b> {prediction_data.get('triage_state', 'N/A')}", styles["Normal"]))
-    story.append(Paragraph(f"<b>Predicted Class:</b> {prediction_data.get('confirmed_outcome', 'N/A')}", styles["Normal"]))
+    predicted = {"FLAGGED_URGENT": "Pneumonia", "CLEARED": "Normal",
+                 "ESCALATED": "Uncertain (referred to specialist)",
+                 "REJECTED": "Not assessed (input rejected)"}.get(prediction_data.get("triage_state"), "N/A")
+    story.append(Paragraph(f"<b>Predicted Class:</b> {predicted}", styles["Normal"]))
+    story.append(Paragraph(f"<b>Confirmed Outcome:</b> {prediction_data.get('confirmed_outcome') or 'Not yet confirmed'}", styles["Normal"]))
     story.append(Spacer(1, 12))
     
     # Metrics
