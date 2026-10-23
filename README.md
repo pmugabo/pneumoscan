@@ -51,7 +51,7 @@ and referral stay with the clinician.
 | R3 | Refuse inputs outside the training distribution | Mahalanobis gate, `models/gate_stats.npz` |
 | R4 | Return one of four triage states | `CLEARED`, `FLAGGED_URGENT`, `ESCALATED`, `REJECTED` |
 | R5 | Show where the model looked | Grad-CAM heatmap on accepted cases |
-| R6 | Record every decision and the confirmed outcome | SQLite `predictions` and `audit_logs` tables |
+| R6 | Record every decision and the confirmed outcome | Firestore `predictions` and `audit_logs` collections |
 | R7 | Be usable by a clinician with no technical training | Web interface, one upload and one click |
 | R8 | Be callable by other systems | REST API with Swagger UI at `/docs` |
 
@@ -63,7 +63,8 @@ and referral stay with the clinician.
 | Classical baselines | scikit-learn, scikit-image (HOG) | Required floor for comparison |
 | Training hardware | Kaggle notebook, free T4 GPU | Zero budget |
 | Backend | FastAPI, Uvicorn | Automatic Swagger UI, typed request validation |
-| Storage | SQLite | No server to run; same schema moves to PostgreSQL |
+| Auth | Firebase Authentication | Managed passwords and sessions; backend verifies ID tokens |
+| Storage | Cloud Firestore | Managed database, no server to run, free tier |
 | Frontend | Plain HTML, CSS and JavaScript | No build step, runs from the backend |
 | Design | Figma | Mockups for each triage state |
 | Version control | Git and GitHub, VS Code | Standard workflow |
@@ -79,7 +80,8 @@ and referral stay with the clinician.
 - Grad-CAM explanations on every accepted decision
 - FastAPI backend with Swagger UI
 - Clinician web interface: upload, triage result, heatmap, outcome feedback, history
-- SQLite persistence with an audit log of every decision
+- Firebase Authentication with clinician / specialist / admin roles
+- Firestore persistence for users, patients, predictions, escalations and an audit log
 
 
 
@@ -181,6 +183,43 @@ pip install -r requirements.txt
 uvicorn backend.main:app --reload
 ```
 
+On Windows PowerShell use Python 3.11 (`py -3.11 -m venv .venv`), activate with
+`.\.venv\Scripts\Activate.ps1` and start with `python -m uvicorn backend.main:app --reload`.
+
+### Firebase
+
+Login and all data go through Firebase. One-time setup in the
+[Firebase console](https://console.firebase.google.com):
+
+1. **Authentication → Sign-in method:** enable Email/Password.
+2. **Firestore Database:** create a database (production mode). Deploy
+   `firestore.rules`, which blocks direct browser access; only the backend reads and writes.
+3. **Project settings → Service accounts → Generate new private key.** Save it as
+   `serviceAccountKey.json` in the repo root (git-ignored), or point
+   `FIREBASE_CREDENTIALS` at it. Never commit it.
+4. **Project settings → General → Your apps → Web app.** Copy the `firebaseConfig`
+   values into `firebase-web-config.json` (see `firebase-web-config.example.json`).
+5. Create the specialist accounts and your admin account:
+   ```bash
+   python -m scripts.seed_firebase --admin-email you@example.com --admin-password 'a-strong-password'
+   ```
+   New sign-ups through the UI are always clinicians; an admin creates specialist and
+   admin accounts from the Admin page.
+
+Firestore collections: `users/{uid}` (email, full_name, role, hospital, is_active),
+`patients`, `predictions` (scores, triage state, downscaled X-ray and heatmap),
+`escalations` and `audit_logs`.
+
+**Local development without a Firebase project:** run the
+[emulators](https://firebase.google.com/docs/emulator-suite) (needs Node and Java 21+):
+```bash
+firebase emulators:start --only auth,firestore --project demo-pneumoscan
+# in another terminal
+export FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
+python -m scripts.seed_firebase --admin-email admin@test.rw --admin-password password123
+uvicorn backend.main:app --reload
+```
+
 The server prints `[engine] loaded efficientnet_b0 ...` when the model and gate
 thresholds have loaded. Stop it with Ctrl+C.
 
@@ -237,8 +276,12 @@ results are in `results/`.
 | GET | `/api/cases` | decision history |
 | GET | `/api/stats` | autonomy rate: share resolved without escalation |
 
+All endpoints except `/api/health`, `/api/model-info` and `/api/firebase-config`
+need a Firebase ID token:
+
 ```bash
 curl -X POST http://127.0.0.1:8000/api/predict \
+  -H "Authorization: Bearer $FIREBASE_ID_TOKEN" \
   -F "file=@samples/PNEUMONIA_person1664_virus_2877.jpeg"
 ```
 
@@ -266,8 +309,9 @@ Example response (values illustrative):
 ```
 Clinician → Web UI → FastAPI → Inference engine → Confidence gate → triage state
                         ↓              ↓                              ↓
-                     SQLite      Grad-CAM (accepted only)       returned to UI
+                    Firestore    Grad-CAM (accepted only)       returned to UI
                    (+ audit log)
+   ↑ Firebase Auth ID token verified on every request
 ```
 
 The offline training pipeline exports the model **together with its operating
@@ -278,7 +322,9 @@ never be deployed without the thresholds it was calibrated against.
 
 ```
 backend/inference.py   model loading, calibration, Mahalanobis gate, Grad-CAM
-backend/main.py        FastAPI endpoints, SQLite persistence, audit log
+backend/main.py        FastAPI endpoints, Firestore persistence, role checks, audit log
+backend/firebase.py    Firebase Admin init, Firestore client, ID-token verification
+scripts/seed_firebase.py  creates specialist/admin accounts
 frontend/index.html    clinician interface (no build step)
 notebooks/             training pipeline (Kaggle notebook with saved outputs)
 models/                gate parameters, gate statistics and EfficientNetB0 weights
@@ -289,16 +335,17 @@ docs/                  Figma mockups and screenshots of the running app
 
 ### Database
 
-`predictions` (prediction_id, filename, created_at, calibrated_prob, ood_score,
-triage_state, model_version, confirmed_outcome, comment) and `audit_logs`
-(log_id, prediction_id, action, timestamp). SQLite in development, PostgreSQL in
-deployment; the schema is identical. The database file is created on first run.
+Cloud Firestore. `users/{uid}` holds the profile and role for each Firebase Auth
+account. `predictions` (filename, created_at, calibrated_prob, ood_score,
+triage_state, model_version, confirmed_outcome, comment, user_id, patient_id),
+`patients`, `escalations` (prediction_id, assigned_to, status, note,
+specialist_comment) and `audit_logs` (prediction_id, action, timestamp, user_id).
 
 
 
 ## Deployment plan
 
-**Now: local.** Uvicorn on a laptop, SQLite, CPU inference. Enough for
+**Now: local.** Uvicorn on a laptop, Firebase (Auth + Firestore), CPU inference. Enough for
 demonstration and usability testing, and it costs nothing.
 
 **Next: hosted prototype.** Export the model to ONNX, containerise with Docker,
@@ -363,7 +410,8 @@ use case, class, ERD, sequence.
    regions before classification.
 4. The gate trades specificity for sensitivity: on accepted cases specificity
    falls from 0.870 to 0.706.
-5. Authentication is implemented in the UI but not connected to a backend authentication system (demo mode).
+5. X-ray images are stored downscaled (max 768 px JPEG) inside Firestore documents;
+   full-resolution storage would need Firebase Storage.
 6. Binary classification only. No bacterial/viral distinction, no lesion
    localisation, no other thoracic disease.
 
