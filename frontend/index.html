@@ -3,122 +3,1404 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PneumoScan — chest X-ray triage</title>
+<title>PneumoScan — Chest X-Ray Triage</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
   :root{
-    --ink:#11161d; --muted:#5d6b7a; --line:#dfe5ec; --bg:#f5f7fa; --panel:#fff;
-    --navy:#2f4b7c; --green:#0f7a46; --red:#b3261e; --amber:#9a6400;
-    --green-bg:#e7f4ed; --red-bg:#fbe9e7; --amber-bg:#fdf3e0;
+    --blue:#2563EB;
+    --blue-dark:#1D4ED8;
+    --blue-light:#3B82F6;
+    --cyan:#06B6D4;
+    --violet:#1D4ED8;
+    --navy:var(--blue);
+    --navy-dark:var(--blue-dark);
+    --navy-light:var(--blue-light);
+    --sky:var(--cyan);
+    --sky-light:#EFF6FF;
+    --violet-light:#DBEAFE;
+    --cyan-light:#ECFEFF;
+    --red:#EF4444;
+    --red-light:#FEE2E2;
+    --green:#10B981;
+    --green-light:#D1FAE5;
+    --amber:#F59E0B;
+    --amber-light:#FEF3C7;
+    --white:#ffffff;
+    --gray-50:#F8FAFC;
+    --gray-100:#F1F5F9;
+    --gray-200:#E2E8F0;
+    --gray-300:#CBD5E1;
+    --gray-400:#94A3B8;
+    --gray-500:#64748B;
+    --gray-600:#475569;
+    --gray-700:#334155;
+    --gray-800:#1E293B;
+    --gray-900:#0F172A;
+    --shadow-sm:0 1px 2px 0 rgba(37,99,235,0.06);
+    --shadow:0 1px 3px 0 rgba(37,99,235,0.08),0 1px 2px 0 rgba(37,99,235,0.04);
+    --shadow-md:0 4px 10px -1px rgba(37,99,235,0.12),0 2px 4px -1px rgba(37,99,235,0.06);
+    --shadow-lg:0 12px 24px -6px rgba(37,99,235,0.15),0 4px 8px -2px rgba(37,99,235,0.08);
+    --glow:0 4px 14px rgba(6,182,212,0.35);
+    --radius-sm:6px;
+    --radius:10px;
+    --radius-lg:16px;
+    --radius-xl:18px;
   }
-  *{box-sizing:border-box}
-  body{margin:0;font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       background:var(--bg);color:var(--ink)}
-  header{background:var(--navy);color:#fff;padding:18px 24px}
-  header h1{margin:0;font-size:19px;letter-spacing:.2px}
-  header p{margin:4px 0 0;font-size:13px;opacity:.85}
-  .banner{background:#fff5d6;border-bottom:1px solid #e8d79a;padding:9px 24px;
-          font-size:13px;color:#6b5200}
-  main{max-width:1020px;margin:0 auto;padding:24px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-  @media(max-width:860px){.grid{grid-template-columns:1fr}}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px}
-  h2{margin:0 0 14px;font-size:15px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
-  .drop{display:block;border:2px dashed #c4cedb;border-radius:10px;padding:38px 18px;text-align:center;
-        cursor:pointer;transition:.15s;color:var(--muted)}
-  .drop:hover,.drop.over{border-color:var(--navy);background:#f2f6fc;color:var(--navy)}
-  .drop strong{display:block;color:var(--ink);margin-bottom:4px}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;margin:0;padding:0;width:100%}
+  body{
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:#F5F8FF;
+    min-height:100vh;
+    color:var(--gray-800);
+    line-height:1.6
+  }
+  .page{display:none}
+  .page.active{display:block}
+
+  /* ============ LOGIN (split screen) ============ */
+  .auth-split{display:flex;min-height:100vh;width:100%;background:var(--white)}
+  .auth-brand{display:none}
+  .auth-brand-logo{
+    width:76px;height:76px;background:var(--white);
+    border-radius:var(--radius-xl);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--blue);font-size:38px;font-weight:800;
+    margin-bottom:20px;box-shadow:0 10px 24px rgba(0,0,0,0.18)
+  }
+  .auth-brand h1{font-size:30px;font-weight:800;margin:0 0 6px;letter-spacing:-0.3px}
+  .auth-brand-tagline{font-size:14px;opacity:0.85;margin:0 0 30px}
+  .auth-brand-features{list-style:none;display:flex;flex-direction:column;gap:12px}
+  .auth-brand-features li{
+    display:flex;align-items:center;gap:10px;
+    font-size:14px;font-weight:500;opacity:0.95
+  }
+  .auth-brand-features li::before{
+    content:'';width:8px;height:8px;border-radius:50%;
+    background:var(--cyan);flex-shrink:0
+  }
+  .auth-form-side{
+    flex:1;background:var(--white);
+    display:flex;align-items:center;justify-content:center;
+    padding:48px 24px
+  }
+  .auth-form-wrap{width:100%;max-width:420px}
+  .mobile-brand{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:10px;margin-bottom:0
+  }
+  .mobile-brand .auth-brand-logo{width:64px;height:64px;font-size:30px;
+    border-radius:16px;margin-bottom:0;
+    background:linear-gradient(135deg,var(--blue),var(--cyan));color:var(--white);
+    box-shadow:0 6px 16px rgba(37,99,235,0.3)
+  }
+  .mobile-brand-text{display:none}
+  /* centered card — used by the welcome page */
+  .login-container{
+    min-height:100vh;display:flex;align-items:center;
+    justify-content:center;padding:20px
+  }
+  .login-card{
+    background:var(--white);border-radius:var(--radius-xl);
+    padding:44px;width:100%;max-width:460px;
+    box-shadow:0 20px 45px -12px rgba(37,99,235,0.18)
+  }
+  .login-header{text-align:center;margin-bottom:28px}
+  .login-logo{
+    width:76px;height:76px;
+    background:linear-gradient(135deg,var(--blue) 0%,var(--cyan) 100%);
+    border-radius:var(--radius-xl);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--white);font-size:38px;font-weight:800;
+    margin:0 auto 18px;
+    box-shadow:0 8px 20px rgba(37,99,235,0.30)
+  }
+  .login-title{font-size:26px;font-weight:800;color:var(--gray-900);margin-bottom:6px}
+  .login-subtitle{font-size:14px;color:var(--gray-500)}
+  .auth-toggle{
+    display:flex;background:var(--sky-light);border-radius:var(--radius);
+    padding:4px;margin-bottom:24px
+  }
+  .auth-toggle-btn{
+    flex:1;padding:10px;border:none;background:transparent;
+    font-size:14px;font-weight:600;color:var(--gray-500);
+    cursor:pointer;border-radius:8px;transition:all 0.18s
+  }
+  .auth-toggle-btn.active{
+    background:linear-gradient(135deg,var(--blue),var(--cyan));
+    color:var(--white);box-shadow:0 2px 8px rgba(37,99,235,0.3)
+  }
+  .form-group{margin-bottom:18px}
+  .form-label{display:block;font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:6px}
+  .form-input,select.form-input{
+    width:100%;padding:12px 14px;border:1.5px solid var(--gray-200);
+    border-radius:var(--radius);font-size:14px;font-family:inherit;
+    transition:border-color 0.18s,box-shadow 0.18s;
+    background:var(--white);color:var(--gray-800)
+  }
+  .form-input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(37,99,235,0.15)}
+  .password-group{position:relative}
+  .password-toggle{
+    position:absolute;right:10px;top:50%;transform:translateY(-50%);
+    background:none;border:none;cursor:pointer;
+    font-size:12px;font-weight:600;color:var(--blue);
+    padding:4px 8px;border-radius:4px
+  }
+  .password-toggle:hover{background:var(--sky-light)}
+  .login-btn{
+    width:100%;
+    background:linear-gradient(135deg,var(--blue) 0%,var(--cyan) 100%);
+    color:var(--white);border:none;border-radius:var(--radius);
+    padding:14px;font-size:15px;font-weight:700;cursor:pointer;
+    transition:all 0.18s;margin-top:6px;letter-spacing:0.3px
+  }
+  .login-btn:hover{transform:translateY(-1px);box-shadow:var(--glow)}
+  .login-footer{text-align:center;margin-top:22px;font-size:12px;color:var(--gray-400)}
+  .form-hidden{display:none}
+
+  /* ============ APP LAYOUT ============ */
+  .app-layout{min-height:100vh;display:flex;flex-direction:column}
+  .app-nav{
+    background:var(--white);padding:0 28px;
+    display:flex;align-items:center;justify-content:space-between;
+    box-shadow:var(--shadow);position:sticky;top:0;z-index:100;
+    height:64px
+  }
+  .app-nav::after{
+    content:'';position:absolute;left:0;right:0;bottom:0;height:3px;
+    background:linear-gradient(90deg,var(--blue) 0%,var(--cyan) 100%)
+  }
+  .nav-brand{display:flex;align-items:center;gap:12px}
+  .nav-logo{
+    width:40px;height:40px;
+    background:linear-gradient(135deg,var(--blue) 0%,var(--cyan) 100%);
+    border-radius:10px;display:flex;align-items:center;justify-content:center;
+    color:var(--white);font-size:20px;font-weight:800;
+    box-shadow:0 4px 10px rgba(37,99,235,0.3)
+  }
+  .nav-brand-text h1{font-size:18px;font-weight:800;color:var(--gray-900);margin:0;letter-spacing:-0.3px}
+  .nav-brand-text p{font-size:11px;color:var(--gray-500);margin:0}
+  .nav-links{display:flex;gap:6px;height:100%;align-items:center}
+  .nav-link{
+    padding:8px 16px;border:none;background:transparent;
+    font-size:14px;font-weight:600;color:var(--gray-600);
+    cursor:pointer;display:flex;align-items:center;
+    border-radius:999px;transition:all 0.18s
+  }
+  .nav-link:hover{color:var(--blue);background:var(--sky-light)}
+  .nav-link.active{
+    background:linear-gradient(135deg,var(--blue),var(--cyan));
+    color:var(--white);box-shadow:0 3px 8px rgba(37,99,235,0.3)
+  }
+  .nav-user{display:flex;align-items:center;gap:12px;position:relative}
+  .profile-trigger{display:flex;align-items:center;gap:12px;cursor:pointer;padding:6px 8px;border-radius:var(--radius);transition:background 0.2s}
+  .profile-trigger:hover{background:var(--gray-100)}
+  .profile-dropdown{
+    display:none;position:absolute;top:calc(100% + 8px);right:0;
+    width:300px;background:var(--white);border:1px solid var(--gray-200);
+    border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:500;overflow:hidden
+  }
+  .profile-dropdown.open{display:block;animation:slideIn 0.2s ease}
+  .pd-header{
+    display:flex;align-items:center;gap:12px;padding:16px;
+    background:linear-gradient(135deg,var(--sky-light) 0%,var(--cyan-light) 100%);
+    border-bottom:1px solid var(--gray-200)
+  }
+  .pd-name{font-size:15px;font-weight:700;color:var(--gray-900)}
+  .pd-role{font-size:12px;color:var(--blue);font-weight:600;text-transform:capitalize}
+  .pd-rows{padding:8px 0}
+  .pd-row{
+    display:flex;justify-content:space-between;padding:8px 16px;
+    font-size:13px;color:var(--gray-700)
+  }
+  .pd-label{color:var(--gray-500);font-weight:600}
+  .pd-action{
+    display:block;width:calc(100% - 32px);margin:6px 16px;padding:10px;
+    border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;
+    cursor:pointer;background:var(--sky-light);color:var(--blue);transition:background 0.18s
+  }
+  .pd-action:hover{background:#DBEAFE}
+  .pd-signout{background:transparent;color:var(--red);margin-bottom:12px}
+  .pd-signout:hover{background:var(--red-light)}
+  .user-info{text-align:right;display:flex;flex-direction:column;line-height:1.2}
+  .user-name{font-size:13px;font-weight:700;color:var(--gray-800)}
+  .user-role{font-size:11px;color:var(--sky);font-weight:600;text-transform:capitalize}
+  .user-avatar{
+    width:38px;height:38px;border-radius:50%;
+    background:linear-gradient(135deg,var(--blue) 0%,var(--cyan) 100%);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--white);font-weight:700;font-size:14px
+  }
+  .logout-btn{
+    padding:7px 14px;background:transparent;color:var(--red);
+    border:1.5px solid #FCA5A5;border-radius:var(--radius-sm);
+    font-size:12px;font-weight:600;cursor:pointer;transition:all 0.18s
+  }
+  .logout-btn:hover{background:var(--red-light);border-color:var(--red)}
+  .app-main{flex:1;padding:28px;width:100%;margin:0;display:flex;flex-direction:column}
+  .page-section{flex:1;display:flex;flex-direction:column;min-height:0}
+  .page-section>.card{flex:1}
+  .dashboard-grid{flex:1;align-items:stretch}
+
+  /* ============ SHARED COMPONENTS ============ */
+  .card{
+    background:var(--white);border-radius:var(--radius-lg);
+    padding:26px;box-shadow:var(--shadow-lg);border:1px solid var(--gray-200);
+    transition:transform 0.18s,box-shadow 0.18s
+  }
+  .card:hover{transform:translateY(-2px);box-shadow:0 16px 32px -8px rgba(37,99,235,0.18),0 6px 12px -4px rgba(37,99,235,0.1)}
+  .card-header{
+    display:flex;align-items:center;justify-content:space-between;
+    margin-bottom:18px;padding-bottom:14px;border-bottom:2px solid var(--gray-100)
+  }
+  .card-title{
+    font-size:17px;font-weight:700;color:var(--gray-900);
+    display:flex;align-items:center;gap:10px
+  }
+  .card-icon{
+    width:34px;height:34px;border-radius:9px;
+    display:flex;align-items:center;justify-content:center;
+    font-size:16px;font-weight:800;flex-shrink:0;
+    color:var(--white)
+  }
+  .card-icon.chip-blue{background:linear-gradient(135deg,var(--blue),var(--blue-light));box-shadow:0 3px 8px rgba(37,99,235,0.3)}
+  .card-icon.chip-cyan{background:linear-gradient(135deg,var(--cyan),#22D3EE);box-shadow:0 3px 8px rgba(6,182,212,0.3)}
+  .card-icon.chip-violet{background:linear-gradient(135deg,var(--blue-dark),var(--blue-light));box-shadow:0 3px 8px rgba(29,78,216,0.3)}
+  .card-icon svg{width:18px;height:18px}
+  button{font-family:inherit}
+  .primary{
+    background:linear-gradient(135deg,var(--blue) 0%,var(--cyan) 100%);
+    color:var(--white);box-shadow:var(--shadow-md);flex:1;
+    font-size:14px;font-weight:700;border:none;border-radius:var(--radius);
+    padding:12px 22px;cursor:pointer;transition:all 0.18s;
+    display:inline-flex;align-items:center;justify-content:center;gap:8px
+  }
+  .primary:hover:not(:disabled){transform:translateY(-1px);box-shadow:var(--glow)}
+  .primary:disabled{background:linear-gradient(135deg,var(--blue),var(--cyan));opacity:0.45;cursor:not-allowed;transform:none;box-shadow:none}
+  .secondary{
+    background:var(--white);color:var(--blue);border:1.5px solid #93C5FD;
+    font-size:13px;font-weight:600;border-radius:var(--radius-sm);
+    padding:10px 18px;cursor:pointer;transition:all 0.18s;
+    display:inline-flex;align-items:center;gap:6px
+  }
+  .secondary:hover{background:var(--sky-light);border-color:var(--blue)}
+  .btn-sky{
+    background:var(--cyan);color:var(--white);border:none;
+    font-size:13px;font-weight:600;border-radius:var(--radius-sm);
+    padding:10px 18px;cursor:pointer;transition:all 0.18s
+  }
+  .btn-sky:hover{background:var(--blue)}
+  .btn-red{
+    background:var(--red);color:var(--white);border:none;
+    font-size:13px;font-weight:600;border-radius:var(--radius-sm);
+    padding:10px 18px;cursor:pointer
+  }
+  .btn-red:hover{background:#DC2626}
+  .modal-btn{
+    flex:1;border:none;font-size:14px;font-weight:600;
+    border-radius:var(--radius-sm);padding:12px;cursor:pointer;
+    transition:all 0.2s
+  }
+  .btn-black{background:var(--gray-900);color:var(--white)}
+  .btn-black:hover{background:#000}
+
+  /* ============ DISCLAIMER ============ */
+  .disclaimer{
+    background:linear-gradient(135deg,#FEF3C7 0%,#FDE68A 100%);
+    border:1px solid #FCD34D;border-radius:999px;
+    padding:12px 22px;margin-bottom:22px;display:flex;
+    align-items:center;gap:12px;box-shadow:var(--shadow-sm)
+  }
+  .disclaimer-icon{
+    width:26px;height:26px;flex-shrink:0;color:#B45309;
+    display:flex;align-items:center;justify-content:center
+  }
+  .disclaimer-icon svg{width:20px;height:20px}
+  .disclaimer-text{font-size:13px;color:#92400E;line-height:1.5}
+  .disclaimer-text strong{color:#78350F}
+
+  /* ============ DASHBOARD ============ */
+  .dashboard-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  @media(max-width:960px){.dashboard-grid{grid-template-columns:1fr}}
+  .patient-select-row{display:flex;gap:10px;margin-bottom:16px}
+  .patient-select-row select{flex:1}
+  .drop-zone{
+    border:2px dashed #93C5FD;border-radius:var(--radius-lg);
+    padding:36px 24px;text-align:center;cursor:pointer;
+    transition:all 0.2s ease;background:var(--sky-light);
+    display:flex;flex-direction:column;align-items:center;justify-content:center
+  }
+  .drop-zone:hover,.drop-zone.over{
+    border-color:var(--cyan);background:var(--cyan-light);
+    transform:scale(1.01)
+  }
+  .drop-zone-icon{
+    width:64px;height:64px;margin:0 auto 14px;
+    background:linear-gradient(135deg,var(--blue),var(--cyan));
+    border-radius:50%;display:flex;align-items:center;justify-content:center;
+    color:var(--white);transition:all 0.2s ease;
+    box-shadow:0 6px 16px rgba(37,99,235,0.3)
+  }
+  .drop-zone-icon svg{width:28px;height:28px}
+  .drop-zone:hover .drop-zone-icon,.drop-zone.over .drop-zone-icon{
+    transform:translateY(-2px);box-shadow:0 8px 20px rgba(6,182,212,0.4)
+  }
+  .drop-zone-text{font-size:15px;font-weight:700;color:var(--gray-800);margin-bottom:4px}
+  .drop-zone-subtext{font-size:13px;color:var(--gray-500);margin-bottom:12px}
+  .drop-zone-browse{
+    display:inline-block;background:var(--white);border:1.5px solid var(--blue);
+    color:var(--blue);font-size:12px;font-weight:700;padding:7px 16px;
+    border-radius:var(--radius-sm);transition:all 0.18s
+  }
+  .drop-zone:hover .drop-zone-browse{background:var(--blue);color:var(--white)}
   input[type=file]{display:none}
-  button{font:inherit;border:0;border-radius:7px;padding:11px 18px;cursor:pointer}
-  .primary{background:var(--navy);color:#fff}
-  .primary:disabled{background:#9aa8bb;cursor:not-allowed}
-  .ghost{background:#eef2f7;color:var(--ink);padding:7px 13px;font-size:14px}
-  .preview{margin-top:16px;display:none}
-  .preview img{width:100%;border-radius:8px;border:1px solid var(--line)}
-  .state{border-radius:9px;padding:16px 18px;margin-bottom:16px}
-  .state h3{margin:0 0 4px;font-size:20px}
-  .state p{margin:0;font-size:14px}
-  .CLEARED{background:var(--green-bg);border-left:5px solid var(--green)}
-  .CLEARED h3{color:var(--green)}
-  .FLAGGED_URGENT{background:var(--red-bg);border-left:5px solid var(--red)}
-  .FLAGGED_URGENT h3{color:var(--red)}
-  .ESCALATED,.REJECTED{background:var(--amber-bg);border-left:5px solid var(--amber)}
-  .ESCALATED h3,.REJECTED h3{color:var(--amber)}
-  .meter{height:9px;background:#e8edf4;border-radius:5px;overflow:hidden;margin:7px 0 3px}
-  .meter span{display:block;height:100%;background:var(--navy)}
-  .rows{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px}
-  .rows td{padding:7px 0;border-bottom:1px solid var(--line)}
-  .rows td:last-child{text-align:right;font-variant-numeric:tabular-nums}
-  .muted{color:var(--muted);font-size:13px}
-  .empty{color:var(--muted);text-align:center;padding:48px 0;font-size:14px}
-  .spin{width:22px;height:22px;border:3px solid #dde4ee;border-top-color:var(--navy);
-        border-radius:50%;animation:r .8s linear infinite;margin:40px auto}
-  @keyframes r{to{transform:rotate(360deg)}}
-  footer{max-width:1020px;margin:0 auto;padding:8px 24px 36px;color:var(--muted);font-size:12px}
-  .fb{display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap}
+  .preview{margin-top:16px;display:none;position:relative}
+  .preview img{width:100%;border-radius:var(--radius);border:2px solid var(--gray-200)}
+  .preview-remove{
+    position:absolute;top:10px;right:10px;
+    background:var(--red);color:var(--white);border:none;
+    border-radius:8px;width:30px;height:30px;cursor:pointer;
+    font-size:16px;font-weight:700;
+    display:flex;align-items:center;justify-content:center
+  }
+  .button-group{display:flex;gap:10px;margin-top:16px}
+  .model-info{
+    margin-top:14px;padding:10px 14px;background:var(--sky-light);
+    border-radius:var(--radius-sm);font-size:12px;color:var(--navy);
+    border-left:3px solid var(--sky)
+  }
+
+  /* ============ RESULTS ============ */
+  .result-container{min-height:200px}
+  .empty-state{
+    display:flex;flex-direction:column;align-items:center;
+    justify-content:center;padding:44px 24px;color:var(--gray-400);text-align:center
+  }
+  .empty-state-icon{
+    width:64px;height:64px;
+    background:linear-gradient(135deg,#DBEAFE 0%,var(--cyan-light) 100%);
+    border-radius:50%;
+    display:flex;align-items:center;justify-content:center;
+    font-size:26px;margin-bottom:14px;color:var(--blue)
+  }
+  .empty-state-icon svg{width:26px;height:26px}
+  .empty-state-text{font-size:14px;color:var(--gray-500);font-weight:500}
+  .state-card{
+    border-radius:var(--radius);padding:20px;margin-bottom:18px;
+    animation:slideIn 0.3s ease;border-left:5px solid
+  }
+  @keyframes slideIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+  .state-card.CLEARED{background:var(--green-light);border-color:var(--green)}
+  .state-card.FLAGGED_URGENT{background:var(--red-light);border-color:var(--red)}
+  .state-card.ESCALATED{background:var(--amber-light);border-color:var(--amber)}
+  .state-card.REJECTED{background:var(--gray-100);border-color:var(--gray-400)}
+  .state-header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .state-icon{display:flex;align-items:center;flex-shrink:0}
+  .state-card.CLEARED .state-icon{color:#047857}
+  .state-card.FLAGGED_URGENT .state-icon{color:var(--red)}
+  .state-card.ESCALATED .state-icon{color:#B45309}
+  .state-card.REJECTED .state-icon{color:var(--gray-500)}
+  .state-title{font-size:19px;font-weight:800;margin:0}
+  .state-card.CLEARED .state-title{color:#047857}
+  .state-card.FLAGGED_URGENT .state-title{color:var(--red)}
+  .state-card.ESCALATED .state-title{color:#B45309}
+  .state-card.REJECTED .state-title{color:var(--gray-600)}
+  .state-description{font-size:14px;color:var(--gray-700);margin:0}
+  .heatmap-container{margin:16px 0}
+  .heatmap-container img{
+    width:100%;border-radius:var(--radius);border:2px solid var(--gray-200);
+    box-shadow:var(--shadow-sm)
+  }
+  .heatmap-caption{font-size:12px;color:var(--gray-500);margin-top:6px;text-align:center}
+  .metrics-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:16px 0}
+  .metric-item{
+    background:var(--gray-50);padding:12px;border-radius:var(--radius-sm);
+    border:1px solid var(--gray-200)
+  }
+  .metric-label{
+    font-size:10px;color:var(--gray-500);margin-bottom:2px;
+    text-transform:uppercase;letter-spacing:0.5px;font-weight:600
+  }
+  .metric-value{font-size:15px;font-weight:700;color:var(--gray-900)}
+  .confidence-bar{margin:14px 0}
+  .confidence-bar-track{height:10px;background:var(--gray-200);border-radius:5px;overflow:hidden}
+  .confidence-bar-fill{
+    height:100%;background:linear-gradient(90deg,var(--blue) 0%,var(--cyan) 100%);
+    border-radius:5px;transition:width 0.5s ease
+  }
+  .confidence-label{
+    display:flex;justify-content:space-between;font-size:12px;
+    color:var(--gray-500);margin-top:5px
+  }
+  .feedback-section{margin-top:18px;padding-top:16px;border-top:1px solid var(--gray-200)}
+  .feedback-label{font-size:13px;font-weight:600;color:var(--gray-700);margin-bottom:10px;display:block}
+  .feedback-buttons{display:flex;gap:8px;flex-wrap:wrap}
+  .feedback-btn{
+    background:var(--white);color:var(--gray-700);border:1.5px solid var(--gray-300);
+    padding:8px 14px;font-size:13px;font-weight:600;border-radius:var(--radius-sm);
+    cursor:pointer;transition:all 0.18s
+  }
+  .feedback-btn:hover{background:var(--sky-light);border-color:#93C5FD}
+  .feedback-btn.active{background:var(--blue);color:var(--white);border-color:var(--blue)}
+  .feedback-message{margin-top:10px;font-size:13px;color:var(--green);font-weight:600}
+  .action-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+  .spinner{
+    width:40px;height:40px;border:4px solid var(--gray-200);
+    border-top-color:var(--sky);border-radius:50%;
+    animation:spin 0.8s linear infinite;margin:48px auto
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* ============ TABLES ============ */
+  .history-table{width:100%;border-collapse:collapse}
+  .history-table th{
+    text-align:left;padding:10px 14px;font-size:11px;font-weight:700;
+    color:var(--blue);text-transform:uppercase;letter-spacing:0.5px;
+    border-bottom:2px solid #BFDBFE;background:var(--sky-light)
+  }
+  .history-table td{
+    padding:12px 14px;font-size:13px;color:var(--gray-700);
+    border-bottom:1px solid var(--gray-100)
+  }
+  .history-table tbody tr:nth-child(even) td{background:#FAFCFF}
+  .history-table tr:hover td{background:#E0F2FE;cursor:pointer}
+  .history-table tr:last-child td{border-bottom:none}
+  .state-badge{
+    display:inline-block;padding:4px 12px;border-radius:999px;
+    font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px
+  }
+  .state-badge.CLEARED{background:var(--green-light);color:#047857}
+  .state-badge.FLAGGED_URGENT{background:var(--red-light);color:var(--red)}
+  .state-badge.ESCALATED{background:var(--amber-light);color:#B45309}
+  .state-badge.REJECTED{background:var(--gray-200);color:var(--gray-600)}
+  .state-badge.pending{background:var(--amber-light);color:#B45309}
+  .state-badge.resolved{background:var(--green-light);color:#047857}
+  .state-badge.sent{background:var(--sky-light);color:var(--blue)}
+  .confirmed-badge{
+    display:inline-block;padding:3px 8px;background:var(--sky-light);
+    color:var(--blue);border-radius:999px;
+    font-size:11px;font-weight:600;margin-left:8px
+  }
+  .stats-row{display:flex;gap:20px;margin-bottom:20px}
+  .stat-box{
+    flex:1;background:var(--white);border:1.5px solid var(--gray-200);
+    border-radius:var(--radius);padding:16px;text-align:center;
+    transition:all 0.18s
+  }
+  .stat-box:hover{border-color:#93C5FD;transform:translateY(-2px);box-shadow:var(--shadow-md)}
+  .stat-value{font-size:26px;font-weight:800;color:var(--blue)}
+  .stat-label{font-size:11px;color:var(--gray-500);text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;font-weight:600}
+  .admin-charts{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:8px}
+  @media(max-width:700px){.admin-charts{grid-template-columns:1fr}}
+  .chart-card{
+    background:var(--gray-50);border:1px solid var(--gray-200);
+    border-radius:var(--radius);padding:18px
+  }
+  .chart-title{
+    font-size:13px;font-weight:700;color:var(--navy);
+    margin-bottom:12px;text-transform:uppercase;letter-spacing:0.4px
+  }
+  .chart-wrap{position:relative;height:220px}
+
+  /* ============ PATIENT PAGE ============ */
+  .patient-card{
+    display:flex;align-items:center;gap:16px;padding:16px;
+    border:1px solid var(--gray-200);border-radius:var(--radius);
+    margin-bottom:10px;cursor:pointer;transition:all 0.2s;
+    background:var(--white)
+  }
+  .patient-card:hover{border-color:#93C5FD;box-shadow:var(--shadow-md);transform:translateY(-1px)}
+  .patient-avatar{
+    width:46px;height:46px;border-radius:50%;flex-shrink:0;
+    background:linear-gradient(135deg,var(--blue) 0%,var(--cyan) 100%);
+    display:flex;align-items:center;justify-content:center;
+    color:var(--white);font-weight:700;font-size:16px
+  }
+  .patient-meta{flex:1;min-width:0}
+  .patient-name{font-size:15px;font-weight:700;color:var(--gray-900)}
+  .patient-details{font-size:12px;color:var(--gray-500)}
+  .patient-id-tag{
+    font-size:11px;font-weight:700;color:var(--blue);
+    background:var(--sky-light);padding:4px 10px;border-radius:var(--radius-sm)
+  }
+
+  /* ============ MODAL ============ */
+  .modal-overlay{
+    display:none;position:fixed;top:0;left:0;width:100%;height:100%;
+    background:rgba(15,23,42,0.45);z-index:1000;
+    align-items:center;justify-content:center;backdrop-filter:blur(4px)
+  }
+  .modal-overlay.open{display:flex}
+  .modal-box{
+    background:var(--white);padding:30px;border-radius:var(--radius-lg);
+    max-width:440px;width:92%;box-shadow:var(--shadow-lg);
+    max-height:90vh;overflow-y:auto
+  }
+  .modal-title{font-size:19px;font-weight:800;color:var(--navy);margin-bottom:20px}
+  .modal-actions{display:flex;gap:10px;margin-top:20px}
+
+  /* ============ TOAST ============ */
+  .toast{
+    position:fixed;bottom:24px;right:24px;z-index:2000;
+    background:var(--navy);color:var(--white);padding:14px 22px;
+    border-radius:var(--radius);font-size:14px;font-weight:600;
+    box-shadow:var(--shadow-lg);opacity:0;transform:translateY(20px);
+    transition:all 0.3s ease;pointer-events:none
+  }
+  .toast.show{opacity:1;transform:translateY(0)}
+  .toast.error{background:var(--red)}
+  .toast.success{background:var(--green)}
+
+  .section-back{
+    background:none;border:none;color:var(--sky);font-size:14px;
+    font-weight:600;cursor:pointer;padding:0;margin-bottom:16px;
+    display:inline-flex;align-items:center;gap:6px
+  }
+  .section-back:hover{color:var(--navy)}
+
+  .review-report{
+    margin-top:10px;background:var(--green-light);border:1px solid #A7F3D0;
+    border-left:4px solid var(--green);border-radius:var(--radius-sm);padding:10px 14px
+  }
+  .review-report-head{font-size:12px;font-weight:700;color:#047857;text-transform:uppercase;letter-spacing:0.4px}
+  .review-report-body{font-size:13px;color:var(--gray-700);margin-top:4px}
+  .review-report-date{font-size:11px;color:var(--gray-500);margin-top:4px}
+
+  @media(max-width:768px){
+    .app-nav{flex-wrap:wrap;height:auto;padding:12px 16px;gap:10px}
+    .app-main{padding:16px}
+    .login-card{padding:30px 24px}
+    .metrics-grid{grid-template-columns:1fr 1fr}
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>PneumoScan</h1>
-  <p>Autonomous chest X-ray triage with a confidence gate</p>
-</header>
-<div class="banner" id="banner">
-  Research prototype — not a certified diagnostic device. Output is a triage
-  decision about an image, not a diagnosis or treatment plan.
+
+<!-- ==================== LOGIN PAGE ==================== -->
+<div class="page" id="loginPage">
+  <div class="auth-split">
+    <div class="auth-brand">
+      <div class="auth-brand-logo">P</div>
+      <h1>PneumoScan</h1>
+      <p class="auth-brand-tagline">Chest X-Ray Triage System</p>
+      <ul class="auth-brand-features">
+        <li>AI-assisted pneumonia triage</li>
+        <li>Fast results for clinicians</li>
+        <li>Secure patient records</li>
+      </ul>
+    </div>
+    <div class="auth-form-side">
+    <div class="auth-form-wrap">
+      <div class="mobile-brand">
+        <div class="auth-brand-logo">P</div>
+        <span class="mobile-brand-text">PneumoScan</span>
+      </div>
+      <div class="login-header">
+        <h1 class="login-title">PneumoScan</h1>
+        <p class="login-subtitle">Chest X-Ray Triage System</p>
+      </div>
+
+      <div class="auth-toggle">
+        <button class="auth-toggle-btn active" id="loginToggle">Sign In</button>
+        <button class="auth-toggle-btn" id="signupToggle">Create Account</button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="loginForm">
+        <div class="form-group">
+          <label class="form-label">Email Address</label>
+          <input type="email" class="form-input" placeholder="clinician@hospital.rw" required>
+        </div>
+        <div class="form-group password-group">
+          <label class="form-label">Password</label>
+          <input type="password" class="form-input" placeholder="Enter your password" required>
+          <button type="button" class="password-toggle" onclick="togglePassword(this)">Show</button>
+        </div>
+        <button type="submit" class="login-btn">Sign In</button>
+      </form>
+
+      <!-- Signup Form -->
+      <form id="signupForm" class="form-hidden">
+        <div class="form-group">
+          <label class="form-label">Full Name</label>
+          <input type="text" class="form-input" placeholder="Dr. Jane Doe" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email Address</label>
+          <input type="email" class="form-input" placeholder="clinician@hospital.rw" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Hospital / Clinic</label>
+          <input type="text" class="form-input" placeholder="e.g. Kigali University Teaching Hospital">
+        </div>
+        <div class="form-group password-group">
+          <label class="form-label">Password</label>
+          <input type="password" class="form-input" placeholder="Minimum 8 characters" required>
+          <button type="button" class="password-toggle" onclick="togglePassword(this)">Show</button>
+        </div>
+        <div class="form-group password-group">
+          <label class="form-label">Confirm Password</label>
+          <input type="password" class="form-input" placeholder="Repeat your password" required>
+          <button type="button" class="password-toggle" onclick="togglePassword(this)">Show</button>
+        </div>
+        <button type="submit" class="login-btn">Create Account</button>
+      </form>
+
+      <div class="login-footer">
+        Research prototype — Not a certified medical device
+      </div>
+    </div>
+    </div>
+  </div>
 </div>
 
-<main>
-  <div class="grid">
-    <section class="panel">
-      <h2>1 · Upload radiograph</h2>
-      <label class="drop" id="drop">
-        <strong>Drop a chest X-ray here</strong>
-        JPEG or PNG, up to 10 MB
-        <input type="file" id="file" accept="image/jpeg,image/png">
-      </label>
-      <div class="preview" id="preview"><img id="thumb" alt="uploaded radiograph"></div>
-      <p style="margin-top:16px">
-        <button class="primary" id="run" disabled>Run triage</button>
-        <button class="ghost" id="clear" style="display:none">Clear</button>
+<!-- ==================== WELCOME PAGE ==================== -->
+<div class="page active" id="welcomePage">
+  <div class="login-container">
+    <div class="login-card" style="text-align:center">
+      <div class="login-logo">P</div>
+      <h1 class="login-title">Welcome to PneumoScan</h1>
+      <p class="login-subtitle">Chest X-Ray Triage System</p>
+      <p style="font-size:14px;color:var(--gray-600);margin:18px 0 24px;line-height:1.7">
+        Clinical decision support for chest X-ray triage.
       </p>
-      <p class="muted" id="modelInfo">checking model…</p>
-    </section>
-
-    <section class="panel">
-      <h2>2 · Triage decision</h2>
-      <div id="result"><div class="empty">No image submitted yet.</div></div>
-    </section>
+      <button class="login-btn" id="welcomeSignInBtn">Sign In →</button>
+      <div class="login-footer">Research prototype — Not a certified medical device</div>
+    </div>
   </div>
+</div>
 
-  <section class="panel" style="margin-top:20px">
-    <h2>Session history</h2>
-    <div id="history"><div class="empty">No decisions recorded yet.</div></div>
-  </section>
-</main>
-<footer>
-  Images used in this prototype come from public, de-identified research datasets.
-  Every decision is logged with its model version and operating thresholds.
-</footer>
+<!-- ==================== APP ==================== -->
+<div class="page" id="appPage">
+  <div class="app-layout">
+    <nav class="app-nav">
+      <div class="nav-brand">
+        <div class="nav-logo">P</div>
+        <div class="nav-brand-text">
+          <h1>PneumoScan</h1>
+          <p>Chest X-Ray Triage</p>
+        </div>
+      </div>
+      <div class="nav-links">
+        <button class="nav-link active" data-page="dashboard" id="scanLink">New Scan</button>
+        <button class="nav-link" data-page="patients" id="patientsLink">Patients</button>
+        <button class="nav-link" data-page="history" id="historyLink">History</button>
+        <button class="nav-link" data-page="sentcases" id="sentLink" style="display:none">Sent Cases</button>
+        <button class="nav-link" data-page="queue" id="queueLink" style="display:none">Review Queue</button>
+        <button class="nav-link" data-page="admin" id="adminLink" style="display:none">Admin</button>
+      </div>
+      <div class="nav-user">
+        <div class="profile-trigger" id="profileTrigger">
+          <div class="user-info">
+            <span class="user-name" id="navUserName">User</span>
+            <span class="user-role" id="navUserRole">clinician</span>
+          </div>
+          <div class="user-avatar" id="navAvatar">U</div>
+        </div>
+        <div class="profile-dropdown" id="profileDropdown">
+          <div class="pd-header">
+            <div class="user-avatar" id="pdAvatar" style="width:44px;height:44px;font-size:16px">U</div>
+            <div>
+              <div class="pd-name" id="pdName">User</div>
+              <div class="pd-role" id="pdRole">clinician</div>
+            </div>
+          </div>
+          <div class="pd-rows">
+            <div class="pd-row"><span class="pd-label">Email</span><span id="pdEmail">—</span></div>
+            <div class="pd-row"><span class="pd-label">Hospital</span><span id="pdHospital">—</span></div>
+            <div class="pd-row"><span class="pd-label">Member since</span><span id="pdSince">—</span></div>
+          </div>
+          <button class="pd-action" id="openSettingsBtn">Profile Settings</button>
+          <button class="pd-action pd-signout" id="dropdownLogout">Sign Out</button>
+        </div>
+        <button class="logout-btn" id="logoutBtn">Sign Out</button>
+      </div>
+    </nav>
+
+    <main class="app-main">
+
+      <!-- ========== NEW SCAN PAGE ========== -->
+      <div class="page-section" id="dashboardSection">
+        <div class="disclaimer">
+          <div class="disclaimer-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+          <div class="disclaimer-text">
+            <strong>Research Prototype</strong> — Output is a triage decision about an image,
+            not a diagnosis or treatment plan. Always confirm clinically.
+          </div>
+        </div>
+
+        <div class="dashboard-grid">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span class="card-icon chip-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></span> Patient &amp; Radiograph</div>
+            </div>
+
+            <!-- Patient selection -->
+            <label class="form-label">Patient</label>
+            <div class="patient-select-row">
+              <select id="patientSelect" class="form-input">
+                <option value="">— Select a patient —</option>
+              </select>
+              <button class="btn-sky" onclick="openPatientModal()">+ New</button>
+            </div>
+
+            <label class="drop-zone" id="drop">
+              <div class="drop-zone-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></div>
+              <div class="drop-zone-text">Drop a chest X-ray here</div>
+              <div class="drop-zone-subtext">JPEG or PNG, up to 10 MB</div>
+              <span class="drop-zone-browse">Browse files</span>
+              <input type="file" id="file" accept="image/jpeg,image/png">
+            </label>
+            <div class="preview" id="preview">
+              <img id="thumb" alt="uploaded radiograph">
+              <button class="preview-remove" id="clearBtn" title="Remove image">×</button>
+            </div>
+            <div class="button-group">
+              <button class="primary" id="run" disabled>Run Triage</button>
+              <button class="secondary" id="clear" style="display:none">Clear</button>
+            </div>
+            <div class="model-info" id="modelInfo">Checking model…</div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title"><span class="card-icon chip-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span> Triage Decision</div>
+            </div>
+            <div class="result-container" id="result">
+              <div class="empty-state">
+                <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+                <div class="empty-state-text">Select a patient and upload a radiograph.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== PATIENTS PAGE ========== -->
+      <div class="page-section" id="patientsSection" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon chip-cyan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span> Patients</div>
+            <button class="btn-sky" onclick="openPatientModal()">+ New Patient</button>
+          </div>
+          <div id="patientList">
+            <div class="empty-state">
+              <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+              <div class="empty-state-text">No patients registered yet.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== PATIENT DETAIL PAGE ========== -->
+      <div class="page-section" id="patientDetailSection" style="display:none">
+        <button class="section-back" onclick="showPage('patients')">← Back to patients</button>
+        <div class="card" id="patientDetailCard"></div>
+      </div>
+
+      <!-- ========== HISTORY PAGE ========== -->
+      <div class="page-section" id="historySection" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon chip-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span> Session History</div>
+          </div>
+          <div id="history">
+            <div class="empty-state">
+              <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>
+              <div class="empty-state-text">No decisions recorded yet.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== CLINICIAN SENT CASES ========== -->
+      <div class="page-section" id="sentcasesSection" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon chip-cyan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></span> Sent Cases</div>
+          </div>
+          <div id="sentList">
+            <div class="empty-state">
+              <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></div>
+              <div class="empty-state-text">No cases sent to specialists yet.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== SPECIALIST QUEUE ========== -->
+      <div class="page-section" id="queueSection" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon chip-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span> Specialist Review Queue</div>
+          </div>
+          <div class="stats-row">
+            <div class="stat-box"><div class="stat-value" id="qAwaiting">–</div><div class="stat-label">Awaiting Review</div></div>
+            <div class="stat-box"><div class="stat-value" id="qInReview">–</div><div class="stat-label">In Review</div></div>
+            <div class="stat-box"><div class="stat-value" id="qResolved">–</div><div class="stat-label">Resolved</div></div>
+          </div>
+          <div id="queueList">
+            <div class="empty-state">
+              <div class="empty-state-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></div>
+              <div class="empty-state-text">No cases awaiting review.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ========== ADMIN PAGE ========== -->
+      <div class="page-section" id="adminSection" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title"><span class="card-icon chip-violet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span> Admin Dashboard</div>
+          </div>
+
+          <div class="stats-row">
+            <div class="stat-box"><div class="stat-value" id="totalPredictions">-</div><div class="stat-label">Total Predictions</div></div>
+            <div class="stat-box"><div class="stat-value" id="autonomyRate">-</div><div class="stat-label">Autonomy Rate</div></div>
+            <div class="stat-box"><div class="stat-value" id="abstentionRate">-</div><div class="stat-label">Abstention Rate</div></div>
+          </div>
+
+          <h3 style="font-size:15px;font-weight:700;color:var(--navy);margin:20px 0 12px">Severity Distribution</h3>
+          <div class="admin-charts">
+            <div class="chart-card">
+              <div class="chart-title">Cases by Severity</div>
+              <div class="chart-wrap"><canvas id="severityChart"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">Confirmed Outcomes</div>
+              <div class="chart-wrap"><canvas id="outcomeChart"></canvas></div>
+            </div>
+          </div>
+
+          <h3 style="font-size:15px;font-weight:700;color:var(--navy);margin:20px 0 12px">By Triage State</h3>
+          <div id="byStateStats"></div>
+
+          <h3 style="font-size:15px;font-weight:700;color:var(--navy);margin:20px 0 12px">Users</h3>
+          <button class="secondary" onclick="openUserModal()" style="margin-bottom:12px">+ Add User</button>
+          <div id="userList"></div>
+
+          <h3 style="font-size:15px;font-weight:700;color:var(--navy);margin:20px 0 12px">Audit Log</h3>
+          <div id="auditLog"></div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- ==================== MODALS ==================== -->
+
+<!-- New Patient Modal -->
+<div class="modal-overlay" id="patientModal">
+  <div class="modal-box">
+    <h3 class="modal-title">New Patient</h3>
+    <div class="form-group">
+      <label class="form-label">Full Name *</label>
+      <input type="text" id="patientName" class="form-input" placeholder="Patient full name">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Age</label>
+      <input type="number" id="patientAge" class="form-input" placeholder="Age in years" min="0" max="120">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Gender</label>
+      <select id="patientGender" class="form-input">
+        <option value="">— Select —</option>
+        <option value="male">Male</option>
+        <option value="female">Female</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Clinical Notes</label>
+      <input type="text" id="patientNotes" class="form-input" placeholder="Optional notes">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" style="flex:1" onclick="closePatientModal()">Cancel</button>
+      <button class="primary" onclick="createPatient()">Create Patient</button>
+    </div>
+  </div>
+</div>
+
+<!-- Escalation Modal -->
+<div class="modal-overlay" id="escalateModal">
+  <div class="modal-box">
+    <h3 class="modal-title">Send to Specialist</h3>
+    <p style="font-size:13px;color:var(--gray-600);margin-bottom:16px">
+      Choose a specialist — the case will appear in their review queue.
+    </p>
+    <div class="form-group">
+      <label class="form-label">Specialist *</label>
+      <select id="specialistSelect" class="form-input">
+        <option value="">Loading specialists…</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Note for specialist</label>
+      <input type="text" id="escalationNote" class="form-input" placeholder="e.g. clinical concern, image quality…">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" style="flex:1" onclick="closeEscalateModal()">Cancel</button>
+      <button class="primary" onclick="sendEscalation()">Send to Specialist</button>
+    </div>
+  </div>
+</div>
+
+<!-- Specialist Resolve Modal -->
+<div class="modal-overlay" id="resolveModal">
+  <div class="modal-box">
+    <h3 class="modal-title">Specialist Review</h3>
+    <div class="form-group">
+      <label class="form-label">Confirmed outcome</label>
+      <select id="resolveOutcome" class="form-input">
+        <option value="">— Select —</option>
+        <option value="pneumonia">Pneumonia</option>
+        <option value="normal">Normal</option>
+        <option value="unknown">Not determinable</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Specialist comment</label>
+      <input type="text" id="resolveComment" class="form-input" placeholder="Review notes">
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" style="flex:1" onclick="closeResolveModal()">Cancel</button>
+      <button class="primary" onclick="resolveEscalation()">Submit Review</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add User Modal (admin) -->
+<div class="modal-overlay" id="userModal">
+  <div class="modal-box">
+    <h3 class="modal-title">Add New User</h3>
+    <div class="form-group">
+      <label class="form-label">Full Name</label>
+      <input type="text" id="newUserName" class="form-input" placeholder="Dr. Jane Doe">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input type="email" id="newUserEmail" class="form-input" placeholder="user@hospital.rw">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Password</label>
+      <input type="password" id="newUserPassword" class="form-input" placeholder="Minimum 8 characters">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Role</label>
+      <select id="newUserRole" class="form-input">
+        <option value="clinician">Clinician</option>
+        <option value="specialist">Specialist</option>
+        <option value="admin">Admin</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" style="flex:1" onclick="closeUserModal()">Cancel</button>
+      <button class="primary" onclick="createUser()">Create User</button>
+    </div>
+  </div>
+</div>
+
+<!-- Profile Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-box">
+    <h3 class="modal-title">Profile Settings</h3>
+    <div class="form-group">
+      <label class="form-label">Full Name</label>
+      <input type="text" id="setName" class="form-input">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Hospital / Clinic</label>
+      <input type="text" id="setHospital" class="form-input" placeholder="e.g. Kigali University Teaching Hospital">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Email</label>
+      <input type="email" id="setEmail" class="form-input" disabled style="background:var(--gray-100);color:var(--gray-500)">
+    </div>
+    <div class="modal-actions">
+      <button class="primary" style="flex:1" onclick="saveProfile()">Save Profile</button>
+    </div>
+
+    <h3 class="modal-title" style="margin-top:28px;font-size:16px">Change Password</h3>
+    <div class="form-group password-group">
+      <label class="form-label">Current Password</label>
+      <input type="password" id="curPw" class="form-input">
+      <button type="button" class="password-toggle" onclick="togglePassword(this)">Show</button>
+    </div>
+    <div class="form-group password-group">
+      <label class="form-label">New Password</label>
+      <input type="password" id="newPw" class="form-input" placeholder="Minimum 8 characters">
+      <button type="button" class="password-toggle" onclick="togglePassword(this)">Show</button>
+    </div>
+    <div class="modal-actions">
+      <button class="secondary" style="flex:1" onclick="closeSettingsModal()">Close</button>
+      <button class="btn-sky" onclick="changePassword()">Change Password</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sign-out Confirmation Modal -->
+<div class="modal-overlay" id="logoutModal">
+  <div class="modal-box" style="max-width:360px;text-align:center">
+    <h3 class="modal-title">Sign Out?</h3>
+    <p style="font-size:14px;color:var(--gray-600);margin-bottom:6px">
+      Are you sure you want to sign out of PneumoScan?
+    </p>
+    <div class="modal-actions">
+      <button class="modal-btn btn-black" onclick="closeLogoutModal()">Cancel</button>
+      <button class="modal-btn btn-red" id="confirmLogoutBtn">Sign Out</button>
+    </div>
+  </div>
+</div>
+
+<!-- Image viewer modal -->
+<div class="modal-overlay" id="imageModal" onclick="closeImageModal()">
+  <div style="max-width:90vw;max-height:90vh;display:flex;flex-direction:column;gap:10px">
+    <div id="imageModalCaption" style="color:var(--white);font-size:14px;font-weight:600;text-align:center"></div>
+    <img id="imageModalImg" src="" alt="X-ray"
+         style="max-width:90vw;max-height:82vh;border-radius:12px;object-fit:contain;background:#000">
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <script>
 const $ = id => document.getElementById(id);
-let chosen = null, lastId = null;
+let chosen = null, lastId = null, userId = null, userRole = 'clinician';
+let currentPatientId = null, currentEscalationId = null;
 
 const LABELS = {
-  CLEARED:        {title:"Cleared",        note:"No specialist review required"},
-  FLAGGED_URGENT: {title:"Flagged urgent", note:"Prioritise clinical assessment"},
-  ESCALATED:      {title:"Escalated",      note:"Send to specialist review"},
-  REJECTED:       {title:"Rejected",       note:"Retake image or escalate"}
+  CLEARED:        {title:"Cleared"},
+  FLAGGED_URGENT: {title:"Flagged Urgent"},
+  ESCALATED:      {title:"Escalated"},
+  REJECTED:       {title:"Rejected"}
 };
 
-fetch("/api/model-info").then(r => r.json()).then(d => {
-  const dt = d.gate.distance_threshold;
-  $("modelInfo").textContent = d.demo_mode
-    ? "DEMO MODE — no trained model loaded; copy model files into models/"
-    : `Model ${d.architecture} · confidence ≥ ${Number(d.gate.confidence_threshold).toFixed(3)}`
-      + (dt == null ? "" : ` · distance ≤ ${Number(dt).toFixed(1)}`);
-}).catch(() => $("modelInfo").textContent = "API unreachable");
+const ICONS = {
+  users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+  inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
+  send: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:22px;height:22px"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+  alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:22px;height:22px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+  question: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:22px;height:22px"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  ban: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:22px;height:22px"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>'
+};
 
+const STATE_ICONS = {CLEARED:'check', FLAGGED_URGENT:'alert', ESCALATED:'question', REJECTED:'ban'};
+
+/* ---------------- Toast ---------------- */
+function toast(msg, type='') {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+/* ---------------- Password toggle ---------------- */
+function togglePassword(btn) {
+  const input = btn.previousElementSibling;
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  btn.textContent = show ? 'Hide' : 'Show';
+}
+
+/* ---------------- Page navigation ---------------- */
+function showPage(pageId) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.page-section').forEach(s => s.style.display = 'none');
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+
+  if (pageId === 'login') {
+    $('loginPage').classList.add('active');
+    return;
+  }
+  if (pageId === 'welcome') {
+    $('welcomePage').classList.add('active');
+    return;
+  }
+  $('appPage').classList.add('active');
+  const map = {
+    dashboard: 'dashboardSection',
+    patients: 'patientsSection',
+    patientDetail: 'patientDetailSection',
+    history: 'historySection',
+    sentcases: 'sentcasesSection',
+    queue: 'queueSection',
+    admin: 'adminSection'
+  };
+  $(map[pageId]).style.display = 'flex';
+  const navBtn = document.querySelector(`[data-page="${pageId}"]`);
+  if (navBtn) navBtn.classList.add('active');
+
+  if (pageId === 'patients') loadPatients();
+  if (pageId === 'history') loadHistory();
+  if (pageId === 'sentcases') loadSentCases();
+  if (pageId === 'queue') loadQueue();
+  if (pageId === 'admin') { loadAdminStats(); loadUsers(); loadAuditLog(); }
+}
+
+document.querySelectorAll('.nav-link').forEach(link => {
+  link.addEventListener('click', () => showPage(link.dataset.page));
+});
+
+/* ---------------- Auth ---------------- */
+$('loginToggle').onclick = () => {
+  $('loginToggle').classList.add('active');
+  $('signupToggle').classList.remove('active');
+  $('loginForm').classList.remove('form-hidden');
+  $('signupForm').classList.add('form-hidden');
+};
+$('signupToggle').onclick = () => {
+  $('signupToggle').classList.add('active');
+  $('loginToggle').classList.remove('active');
+  $('signupForm').classList.remove('form-hidden');
+  $('loginForm').classList.add('form-hidden');
+};
+
+function applySession(user) {
+  userRole = user.role;
+  userId = user.user_id;
+  const initials = user.full_name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  $('navAvatar').textContent = initials || 'U';
+  $('navUserName').textContent = user.full_name;
+  $('navUserRole').textContent = user.role;
+  localStorage.setItem('userEmail', user.email);
+  localStorage.setItem('userRole', user.role);
+  localStorage.setItem('userName', user.full_name);
+  localStorage.setItem('userHospital', user.hospital || '');
+  localStorage.setItem('userSince', user.created_at || '');
+  const isAdmin = user.role === 'admin', isSpec = user.role === 'specialist';
+  $('adminLink').style.display = isAdmin ? 'inline-flex' : 'none';
+  $('queueLink').style.display = isSpec ? 'inline-flex' : 'none';
+  $('sentLink').style.display = user.role === 'clinician' ? 'inline-flex' : 'none';
+  $('scanLink').style.display = (!isAdmin && !isSpec) ? 'inline-flex' : 'none';
+  $('patientsLink').style.display = isAdmin ? 'none' : 'inline-flex';
+  $('historyLink').style.display = isAdmin ? 'none' : 'inline-flex';
+  localStorage.setItem('userId', user.user_id);
+}
+
+function landingPage() {
+  if (userRole === 'specialist') return 'queue';
+  if (userRole === 'admin') return 'admin';
+  return 'dashboard';
+}
+
+$('welcomeSignInBtn').onclick = () => showPage('login');
+
+$('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const email = $('loginForm').querySelector('input[type="email"]').value;
+  const password = $('loginForm').querySelector('input[type="password"]').value;
+  try {
+    const res = await fetch("/api/auth/login", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email, password})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Login failed");
+    applySession(data.user);
+    toast(`Welcome back, ${data.user.full_name}`, 'success');
+    showPage(landingPage());
+    loadModelInfo();
+    loadPatientsDropdown();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+});
+
+$('signupForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const inputs = $('signupForm').querySelectorAll('input');
+  const name = inputs[0].value, email = inputs[1].value, hospital = inputs[2].value;
+  const pw1 = inputs[3].value, pw2 = inputs[4].value;
+  if (pw1 !== pw2) { toast('Passwords do not match', 'error'); return; }
+  if (pw1.length < 8) { toast('Password must be at least 8 characters', 'error'); return; }
+  try {
+    const res = await fetch("/api/auth/register", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email, password: pw1, full_name: name, hospital: hospital || null})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Registration failed");
+    // auto-login
+    const loginRes = await fetch("/api/auth/login", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email, password: pw1})
+    });
+    const loginData = await loginRes.json();
+    applySession(loginData.user);
+    toast(`Account created. Welcome, ${name}`, 'success');
+    showPage(landingPage());
+    loadModelInfo();
+    loadPatientsDropdown();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+});
+
+function openLogoutModal() { $('logoutModal').classList.add('open'); }
+function closeLogoutModal() { $('logoutModal').classList.remove('open'); }
+
+function doLogout() {
+  closeLogoutModal();
+  localStorage.clear();
+  userId = null; userRole = 'clinician';
+  $('loginForm').reset(); $('signupForm').reset();
+  showPage('login');
+}
+
+$('logoutBtn').onclick = openLogoutModal;
+$('confirmLogoutBtn').onclick = doLogout;
+
+/* ---------------- Model info ---------------- */
+function loadModelInfo() {
+  fetch("/api/model-info").then(r => r.json()).then(d => {
+    const dt = d.gate.distance_threshold;
+    $("modelInfo").textContent = d.demo_mode
+      ? "DEMO MODE — no trained model loaded"
+      : `Model: ${d.architecture} · conf ≥ ${Number(d.gate.confidence_threshold).toFixed(3)}`
+        + (dt == null ? "" : ` · dist ≤ ${Number(dt).toFixed(1)}`);
+  }).catch(() => $("modelInfo").textContent = "API unreachable");
+}
+
+/* ---------------- Patients ---------------- */
+function openPatientModal() { $('patientModal').classList.add('open'); }
+function closePatientModal() {
+  $('patientModal').classList.remove('open');
+  ['patientName','patientAge','patientGender','patientNotes'].forEach(id => $(id).value = '');
+}
+
+async function createPatient() {
+  const name = $('patientName').value.trim();
+  if (!name) { toast('Patient name is required', 'error'); return; }
+  try {
+    const res = await fetch(`/api/patients?user_id=${localStorage.getItem('userId') || ''}`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        full_name: name,
+        age: $('patientAge').value ? parseInt($('patientAge').value) : null,
+        gender: $('patientGender').value || null,
+        notes: $('patientNotes').value
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Failed to create patient");
+    toast('Patient created: ' + data.patient_id, 'success');
+    closePatientModal();
+    loadPatients();
+    loadPatientsDropdown(data.patient_id);
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function loadPatientsDropdown(selectId) {
+  const res = await fetch("/api/patients").then(r => r.json());
+  const sel = $('patientSelect');
+  sel.innerHTML = '<option value="">— Select a patient —</option>' +
+    res.patients.map(p => `<option value="${p.patient_id}">${p.full_name} (${p.patient_id})</option>`).join('');
+  if (selectId) sel.value = selectId;
+}
+
+async function loadPatients() {
+  const specParam = userRole === 'specialist' ? `?specialist_id=${localStorage.getItem('userId')}` : '';
+  const res = await fetch(`/api/patients${specParam}`).then(r => r.json());
+  if (!res.patients.length) {
+    $('patientList').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">${ICONS.users}</div>
+        <div class="empty-state-text">No patients registered yet.</div>
+      </div>`;
+    return;
+  }
+  $('patientList').innerHTML = res.patients.map(p => {
+    const initials = p.full_name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2);
+    const details = [
+      p.age ? `${p.age} yrs` : null,
+      p.gender ? p.gender.charAt(0).toUpperCase() + p.gender.slice(1) : null,
+      `${p.scan_count} scan${p.scan_count === 1 ? '' : 's'}`
+    ].filter(Boolean).join(' · ');
+    return `
+      <div class="patient-card" onclick="openPatientDetail('${p.patient_id}')">
+        <div class="patient-avatar">${initials}</div>
+        <div class="patient-meta">
+          <div class="patient-name">${p.full_name}</div>
+          <div class="patient-details">${details}</div>
+        </div>
+        <span class="patient-id-tag">${p.patient_id}</span>
+      </div>`;
+  }).join('');
+}
+
+async function openPatientDetail(patientId) {
+  const res = await fetch(`/api/patients/${patientId}`).then(r => r.json());
+  const p = res.patient;
+  const initials = p.full_name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2);
+  const meta = [
+    p.age ? `Age ${p.age}` : null,
+    p.gender ? p.gender.charAt(0).toUpperCase() + p.gender.slice(1) : null,
+    p.created_at ? `Registered ${p.created_at.slice(0,10)}` : null
+  ].filter(Boolean).join(' · ');
+
+  let scans = '';
+  if (res.predictions.length) {
+    scans = `
+      <table class="history-table">
+        <thead><tr><th>Date</th><th>File</th><th>State</th><th>Outcome</th></tr></thead>
+        <tbody>
+          ${res.predictions.map(pr => `
+            <tr>
+              <td>${pr.created_at ? pr.created_at.slice(0,16).replace('T',' ') : '—'}</td>
+              <td>${pr.filename || '—'}</td>
+              <td><span class="state-badge ${pr.triage_state}">${(LABELS[pr.triage_state]||{title:pr.triage_state}).title}</span></td>
+              <td>${pr.confirmed_outcome || '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } else {
+    scans = '<div class="empty-state"><div class="empty-state-text">No scans yet for this patient.</div></div>';
+  }
+
+  let escHtml = '';
+  if (res.escalations.length) {
+    escHtml = '<h3 style="font-size:15px;font-weight:700;color:var(--navy);margin:20px 0 12px">Escalations</h3>' +
+      res.escalations.map(e => `
+        <div class="patient-card" style="cursor:default">
+          <div class="patient-meta">
+            <div class="patient-name">${e.escalation_id} — ${e.status}</div>
+            <div class="patient-details">
+              ${e.specialist_name ? 'Reviewed by ' + e.specialist_name : 'Awaiting specialist'}
+              ${e.specialist_comment ? ' · "' + e.specialist_comment + '"' : ''}
+            </div>
+          </div>
+          <span class="state-badge ${e.status}">${e.status}</span>
+        </div>`).join('');
+  }
+
+  $('patientDetailCard').innerHTML = `
+    <div class="card-header">
+      <div class="card-title">
+        <div class="patient-avatar">${initials}</div>
+        <div>
+          <div style="font-size:19px">${p.full_name}</div>
+          <div style="font-size:12px;color:var(--gray-500);font-weight:500">${meta}</div>
+        </div>
+      </div>
+      <span class="patient-id-tag">${p.patient_id}</span>
+    </div>
+    ${p.notes ? `<p style="font-size:13px;color:var(--gray-600);margin-bottom:16px"><b>Notes:</b> ${p.notes}</p>` : ''}
+    <h3 style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:12px">Scans (${res.predictions.length})</h3>
+    ${scans}
+    ${escHtml}`;
+  showPage('patientDetail');
+}
+
+/* ---------------- File handling ---------------- */
 const drop = $("drop");
 ["dragover","dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
   e.preventDefault();
@@ -132,91 +1414,480 @@ function pick(f){
   $("thumb").src = URL.createObjectURL(f);
   $("preview").style.display = "block";
   $("run").disabled = false;
-  $("clear").style.display = "inline-block";
+  $("clear").style.display = "inline-flex";
 }
 
-$("clear").onclick = () => {
-  chosen = null; $("preview").style.display = "none";
-  $("run").disabled = true; $("clear").style.display = "none";
-  $("result").innerHTML = '<div class="empty">No image submitted yet.</div>';
-};
+function resetUpload(){
+  chosen = null;
+  $("preview").style.display = "none";
+  $("run").disabled = true;
+  $("clear").style.display = "none";
+  $("result").innerHTML = `
+    <div class="empty-state">
+      <div class="empty-state-icon">${ICONS.image}</div>
+      <div class="empty-state-text">Select a patient and upload a radiograph.</div>
+    </div>`;
+}
+$("clearBtn").onclick = resetUpload;
+$("clear").onclick = resetUpload;
 
+/* ---------------- Predict ---------------- */
 $("run").onclick = async () => {
   if (!chosen) return;
+  const patientId = $('patientSelect').value;
+  if (!patientId) { toast('Please select or create a patient first', 'error'); return; }
   $("run").disabled = true;
-  $("result").innerHTML = '<div class="spin"></div>';
-  const body = new FormData(); body.append("file", chosen);
-  try{
-    const res = await fetch("/api/predict", {method:"POST", body});
+  $("result").innerHTML = '<div class="spinner"></div>';
+  const body = new FormData();
+  body.append("file", chosen);
+  try {
+    const res = await fetch(`/api/predict?patient_id=${encodeURIComponent(patientId)}&user_id=${localStorage.getItem('userId') || ''}`, {method:"POST", body});
     if (!res.ok) throw new Error((await res.json()).detail || "request failed");
     render(await res.json());
     loadHistory();
-  }catch(err){
-    $("result").innerHTML = `<div class="state REJECTED"><h3>Error</h3><p>${err.message}</p></div>`;
+  } catch(err) {
+    $("result").innerHTML = `
+      <div class="state-card REJECTED">
+        <div class="state-header"><h3 class="state-title">Error</h3></div>
+        <p class="state-description">${err.message}</p>
+      </div>`;
   }
   $("run").disabled = false;
 };
 
 function render(d){
   lastId = d.prediction_id;
-  const L = LABELS[d.state] || {title:d.state, note:""};
+  const L = LABELS[d.state] || {title:d.state};
   const pct = (d.confidence*100).toFixed(1);
+  const escalateBtn = (d.state === 'ESCALATED' || d.state === 'REJECTED')
+    ? `<button class="btn-red" onclick="openEscalateModal()">Send to Specialist</button>` : '';
   $("result").innerHTML = `
-    <div class="state ${d.state}">
-      <h3>${L.title}</h3>
-      <p>${d.reason}</p>
+    <div class="state-card ${d.state}">
+      <div class="state-header"><span class="state-icon">${ICONS[STATE_ICONS[d.state]] || ''}</span><h3 class="state-title">${L.title}</h3></div>
+      <p class="state-description">${d.reason}</p>
     </div>
-    ${d.heatmap_png ? `<img src="${d.heatmap_png}" style="width:100%;border-radius:8px;
-       border:1px solid var(--line)" alt="Grad-CAM heatmap">
-       <p class="muted" style="margin:6px 0 14px">Highlighted regions are those that
-       most influenced the decision — check they fall on the lung fields.</p>` : ""}
-    <table class="rows">
-      <tr><td>Predicted class</td><td>${d.label}</td></tr>
-      <tr><td>Calibrated probability of pneumonia</td><td>${d.probability.toFixed(3)}</td></tr>
-      <tr><td>Confidence</td><td>${pct}%</td></tr>
-      <tr><td>Out-of-distribution score</td><td>${d.ood_score.toFixed(1)}</td></tr>
-      <tr><td>Model version</td><td>${d.model_version}</td></tr>
-    </table>
-    <div class="meter"><span style="width:${pct}%"></span></div>
-    <p class="muted">Confidence against an operating threshold of
-      ${Number(d.thresholds.confidence ?? 0).toFixed(3)}</p>
-    <div class="fb">
-      <span class="muted">Confirmed outcome:</span>
-      <button class="ghost" onclick="sendFb('pneumonia')">Pneumonia</button>
-      <button class="ghost" onclick="sendFb('normal')">Normal</button>
-      <button class="ghost" onclick="sendFb('unknown')">Not yet known</button>
-      <span id="fbMsg" class="muted"></span>
+    ${d.heatmap_png ? `
+      <div class="heatmap-container">
+        <img src="${d.heatmap_png}" alt="Grad-CAM heatmap">
+        <p class="heatmap-caption">Highlighted regions influenced the decision — verify they fall on the lung fields.</p>
+      </div>` : ""}
+    <div class="metrics-grid">
+      <div class="metric-item"><div class="metric-label">Predicted Class</div><div class="metric-value">${d.label}</div></div>
+      <div class="metric-item"><div class="metric-label">Pneumonia Prob</div><div class="metric-value">${d.probability.toFixed(3)}</div></div>
+      <div class="metric-item"><div class="metric-label">Confidence</div><div class="metric-value">${pct}%</div></div>
+      <div class="metric-item"><div class="metric-label">OOD Score</div><div class="metric-value">${d.ood_score.toFixed(1)}</div></div>
+      <div class="metric-item"><div class="metric-label">Model</div><div class="metric-value">${d.model_version}</div></div>
+      <div class="metric-item"><div class="metric-label">Threshold</div><div class="metric-value">${Number(d.thresholds.confidence ?? 0).toFixed(3)}</div></div>
+    </div>
+    <div class="confidence-bar">
+      <div class="confidence-bar-track"><div class="confidence-bar-fill" style="width:${pct}%"></div></div>
+      <div class="confidence-label"><span>Confidence ${pct}%</span><span>Gate ≥ ${Number(d.thresholds.confidence ?? 0).toFixed(3)}</span></div>
+    </div>
+    <div class="feedback-section">
+      <label class="feedback-label">Confirm clinical outcome:</label>
+      <div class="feedback-buttons">
+        <button class="feedback-btn" onclick="sendFb('pneumonia', this)">Pneumonia</button>
+        <button class="feedback-btn" onclick="sendFb('normal', this)">Normal</button>
+        <button class="feedback-btn" onclick="sendFb('unknown', this)">Not Yet Known</button>
+      </div>
+      <div class="feedback-message" id="fbMsg"></div>
+    </div>
+    <div class="action-row">
+      ${escalateBtn}
+      <button class="secondary" onclick="downloadReport('${d.prediction_id}')">Download PDF Report</button>
     </div>`;
 }
 
-async function sendFb(outcome){
+async function sendFb(outcome, btn){
   if (!lastId) return;
-  await fetch("/api/feedback", {
+  await fetch(`/api/feedback?user_id=${localStorage.getItem('userId') || ''}`, {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({prediction_id:lastId, confirmed_outcome:outcome, comment:""})
   });
-  $("fbMsg").textContent = "recorded";
+  document.querySelectorAll('.feedback-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  $("fbMsg").textContent = "Outcome recorded";
   loadHistory();
 }
 
+function downloadReport(pid){ window.open(`/api/report/${pid}`, '_blank'); }
+
+/* ---------------- Escalation ---------------- */
+async function openEscalateModal() {
+  $('escalateModal').classList.add('open');
+  const sel = $('specialistSelect');
+  sel.innerHTML = '<option value="">Loading specialists…</option>';
+  try {
+    const data = await fetch("/api/specialists").then(r => r.json());
+    sel.innerHTML = '<option value="">— Choose a specialist —</option>' +
+      data.specialists.map(s =>
+        `<option value="${s.user_id}" ${s.is_active ? '' : 'disabled'}>${s.full_name}` +
+        `${s.hospital ? ' — ' + s.hospital : ''}${s.is_active ? '' : ' (unavailable)'}</option>`
+      ).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="">Could not load specialists</option>';
+  }
+}
+function closeEscalateModal() { $('escalateModal').classList.remove('open'); $('escalationNote').value = ''; $('specialistSelect').innerHTML = '<option value="">Loading specialists…</option>'; }
+
+async function sendEscalation() {
+  if (!lastId) return;
+  const specialistId = $('specialistSelect').value;
+  if (!specialistId) { toast('Please choose a specialist', 'error'); return; }
+  try {
+    const res = await fetch(`/api/escalations?user_id=${localStorage.getItem('userId') || ''}`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({prediction_id: lastId, specialist_id: parseInt(specialistId), note: $('escalationNote').value})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Escalation failed");
+    toast(`Case sent to ${data.specialist_name}`, 'success');
+    closeEscalateModal();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+/* ---------------- Clinician sent cases ---------------- */
+const ESC_STATUS = {sent:'Sent', pending:'Pending', resolved:'Response given'};
+
+async function loadSentCases() {
+  const uid = localStorage.getItem('userId');
+  const res = await fetch(`/api/escalations?created_by=${uid}`).then(r => r.json());
+  if (!res.escalations.length) {
+    $('sentList').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">${ICONS.send}</div>
+        <div class="empty-state-text">No cases sent to specialists yet.</div>
+      </div>`;
+    return;
+  }
+  $('sentList').innerHTML = res.escalations.map(e => {
+    const d = e.created_at ? new Date(e.created_at) : null;
+    const date = d ? d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) + ' ' +
+                       d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : '—';
+    const meta = [e.patient_name || 'Unknown patient',
+                  'to ' + (e.specialist_name || 'specialist'), date].join(' · ');
+    let responseHtml = '';
+    if (e.status === 'resolved') {
+      responseHtml = `
+        <div class="review-report">
+          <div class="review-report-head">Specialist Review${e.confirmed_outcome ? ' — ' + e.confirmed_outcome : ''}</div>
+          <div class="review-report-body">${e.specialist_comment || 'No comment'}</div>
+          ${e.resolved_at ? `<div class="review-report-date">Reviewed ${new Date(e.resolved_at).toLocaleString()}</div>` : ''}
+        </div>`;
+    }
+    return `
+      <div class="patient-card" style="cursor:default">
+        <div class="patient-meta">
+          <div class="patient-name">${e.escalation_id} — ${e.patient_name || 'Case'}</div>
+          <div class="patient-details">${meta}</div>
+          ${e.note ? `<div class="patient-details" style="margin-top:4px"><b>Note:</b> ${e.note}</div>` : ''}
+          ${responseHtml}
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-shrink:0">
+          ${e.image_png ? `<img src="${e.image_png}" title="Click to enlarge" onclick="viewImage('${e.image_png}','X-ray — ${e.patient_name || 'case'}')" style="width:80px;height:80px;border-radius:8px;object-fit:cover;border:1.5px solid var(--gray-200);cursor:zoom-in">` : ''}
+          <span class="state-badge ${e.status}">${ESC_STATUS[e.status] || e.status}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/* ---------------- Specialist queue ---------------- */
+async function loadQueue() {
+  const uid = localStorage.getItem('userId');
+  const res = await fetch(`/api/escalations?assigned_to=${uid}`).then(r => r.json());
+  $('qAwaiting').textContent = res.escalations.filter(e => e.status === 'sent').length;
+  $('qInReview').textContent = res.escalations.filter(e => e.status === 'pending').length;
+  $('qResolved').textContent = res.escalations.filter(e => e.status === 'resolved').length;
+  if (!res.escalations.length) {
+    $('queueList').innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">${ICONS.inbox}</div>
+        <div class="empty-state-text">No cases in your review queue.</div>
+      </div>`;
+    return;
+  }
+  $('queueList').innerHTML = res.escalations.map(e => {
+    const statusBadge = `<span class="state-badge ${e.status}">${ESC_STATUS[e.status] || e.status}</span>`;
+    const patient = e.patient_name || 'Unknown patient';
+    const d = e.created_at ? new Date(e.created_at) : null;
+    const meta = [
+      e.patient_id,
+      e.age ? `${e.age} yrs` : null,
+      e.gender, `sent by ${e.clinician_name || 'clinician'}`,
+      d ? d.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' +
+          d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'}) : null
+    ].filter(Boolean).join(' · ');
+    const modelSummary = `Model: ${(LABELS[e.triage_state]||{title:e.triage_state}).title}` +
+      (e.calibrated_prob != null ? ` · P ${e.calibrated_prob.toFixed(3)}` : '') +
+      (e.ood_score != null ? ` · OOD ${e.ood_score.toFixed(0)}` : '');
+    let actionBtn = '';
+    if (e.status === 'sent')
+      actionBtn = `<button class="secondary" onclick="startReview('${e.escalation_id}')">Mark as Reviewing</button>`;
+    if (e.status === 'sent' || e.status === 'pending')
+      actionBtn += `<button class="btn-sky" onclick="openResolveModal('${e.escalation_id}')">Submit Review</button>`;
+    return `
+      <div class="patient-card" style="cursor:default">
+        <div class="patient-meta">
+          <div class="patient-name">${e.escalation_id} — ${patient}</div>
+          <div class="patient-details">${meta}</div>
+          <div class="patient-details" style="margin-top:4px"><b>${modelSummary}</b></div>
+          ${e.note ? `<div class="patient-details" style="margin-top:4px"><b>Clinician note:</b> ${e.note}</div>` : ''}
+          ${e.specialist_comment ? `<div class="review-report"><div class="review-report-head">Your Review${e.confirmed_outcome ? ' — ' + e.confirmed_outcome : ''}</div><div class="review-report-body">${e.specialist_comment}</div></div>` : ''}
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-shrink:0">
+          ${e.image_png ? `<img src="${e.image_png}" title="Original X-ray — click to enlarge" onclick="viewImage('${e.image_png}','Original X-ray — ${patient}')" style="width:110px;height:110px;border-radius:8px;object-fit:cover;border:1.5px solid var(--gray-200);cursor:zoom-in">` : ''}
+          ${e.heatmap_png ? `<img src="${e.heatmap_png}" title="Model heatmap — click to enlarge" onclick="viewImage('${e.heatmap_png}','Model heatmap — ${patient}')" style="width:110px;height:110px;border-radius:8px;object-fit:cover;border:1.5px solid var(--gray-200);cursor:zoom-in">` : ''}
+          ${statusBadge}
+          ${actionBtn}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function viewImage(src, caption) {
+  $('imageModalImg').src = src;
+  $('imageModalCaption').textContent = caption || '';
+  $('imageModal').classList.add('open');
+}
+function closeImageModal() { $('imageModal').classList.remove('open'); }
+
+async function startReview(escId) {
+  await fetch(`/api/escalations/${escId}/start?user_id=${localStorage.getItem('userId') || ''}`, {method:'POST'});
+  loadQueue();
+}
+
+function openResolveModal(escId) { currentEscalationId = escId; $('resolveModal').classList.add('open'); }
+function closeResolveModal() { $('resolveModal').classList.remove('open'); $('resolveOutcome').value=''; $('resolveComment').value=''; }
+
+async function resolveEscalation() {
+  const outcome = $('resolveOutcome').value;
+  const comment = $('resolveComment').value;
+  if (!comment.trim()) { toast('Please add a review comment', 'error'); return; }
+  try {
+    const res = await fetch(`/api/escalations/${currentEscalationId}/resolve?user_id=${localStorage.getItem('userId') || ''}`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({specialist_comment: comment, confirmed_outcome: outcome || null})
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Resolve failed");
+    toast('Review submitted', 'success');
+    closeResolveModal();
+    loadQueue();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+/* ---------------- History ---------------- */
 async function loadHistory(){
+  const specParam = userRole === 'specialist' ? `&specialist_id=${localStorage.getItem('userId')}` : '';
   const [cases, stats] = await Promise.all([
-    fetch("/api/cases?limit=10").then(r => r.json()),
+    fetch(`/api/cases?limit=25${specParam}`).then(r => r.json()),
     fetch("/api/stats").then(r => r.json())
   ]);
-  if (!cases.count){ return; }
+  if (!cases.count){
+    $("history").innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">${ICONS.clock}</div>
+        <div class="empty-state-text">No decisions recorded yet.</div>
+      </div>`;
+    return;
+  }
   const rate = stats.autonomy_rate == null ? "—" : (stats.autonomy_rate*100).toFixed(0)+"%";
   $("history").innerHTML = `
-    <p class="muted">${stats.total} decisions · autonomy rate ${rate}
-      (share resolved without escalation)</p>
-    <table class="rows">
-      <tr><td><strong>File</strong></td><td><strong>State</strong></td></tr>
-      ${cases.cases.map(c => `<tr><td>${c.filename ?? "—"}
-        ${c.confirmed_outcome ? `<span class="muted">· confirmed ${c.confirmed_outcome}</span>` : ""}</td>
-        <td>${(LABELS[c.triage_state]||{title:c.triage_state}).title}</td></tr>`).join("")}
+    <div class="stats-row">
+      <div class="stat-box"><div class="stat-value">${stats.total}</div><div class="stat-label">Total Decisions</div></div>
+      <div class="stat-box"><div class="stat-value">${rate}</div><div class="stat-label">Autonomy Rate</div></div>
+    </div>
+    <table class="history-table">
+      <thead><tr><th>Date & Time</th><th>Patient</th><th>File</th><th>State</th></tr></thead>
+      <tbody>
+        ${cases.cases.map(c => {
+          const d = c.created_at ? new Date(c.created_at) : null;
+          const date = d ? d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+          const time = d ? d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:true}) : '';
+          const patient = c.patient_name ? `${c.patient_name} (${c.pid||''})` : '—';
+          return `
+            <tr>
+              <td><div style="font-weight:600">${date}</div><div style="font-size:11px;color:var(--gray-500)">${time}</div></td>
+              <td>${patient}</td>
+              <td>${c.filename ?? "—"}${c.confirmed_outcome ? `<span class="confirmed-badge">${c.confirmed_outcome}</span>` : ""}</td>
+              <td><span class="state-badge ${c.triage_state}">${(LABELS[c.triage_state]||{title:c.triage_state}).title}</span></td>
+            </tr>`;
+        }).join("")}
+      </tbody>
     </table>`;
 }
-loadHistory();
+
+/* ---------------- Admin ---------------- */
+let severityChart = null, outcomeChart = null;
+const STATE_COLORS = {
+  CLEARED: '#10B981', FLAGGED_URGENT: '#EF4444',
+  ESCALATED: '#F59E0B', REJECTED: '#64748B'
+};
+
+async function loadAdminStats() {
+  try {
+    const stats = await fetch("/api/admin/stats").then(r => r.json());
+    $("totalPredictions").textContent = stats.total_predictions;
+    $("autonomyRate").textContent = stats.autonomy_rate ? (stats.autonomy_rate*100).toFixed(0)+"%" : "—";
+    $("abstentionRate").textContent = stats.abstention_rate ? (stats.abstention_rate*100).toFixed(0)+"%" : "—";
+    const order = ['FLAGGED_URGENT','ESCALATED','REJECTED','CLEARED'];
+    let html = '<table class="history-table"><thead><tr><th>State</th><th>Count</th></tr></thead><tbody>';
+    for (const s of order) {
+      html += `<tr><td><span class="state-badge ${s}">${s}</span></td><td>${stats.by_state[s] || 0}</td></tr>`;
+    }
+    html += '</tbody></table>';
+    $("byStateStats").innerHTML = html;
+
+    // Severity doughnut chart — always show all four states, even with 0
+    const labels = order;
+    const values = labels.map(s => stats.by_state[s] || 0);
+    const colors = labels.map(s => STATE_COLORS[s] || '#94A3B8');
+    if (severityChart) severityChart.destroy();
+    severityChart = new Chart($('severityChart'), {
+      type: 'doughnut',
+      data: {labels, datasets: [{data: values, backgroundColor: colors,
+        borderColor: '#fff', borderWidth: 2}]},
+      options: {responsive: true, maintainAspectRatio: false, cutout: '62%',
+        plugins: {legend: {position: 'bottom', labels: {boxWidth: 12, font: {size: 11, weight: 600}}}}}
+    });
+
+    // Confirmed outcomes bar chart
+    const outLabels = Object.keys(stats.by_outcome || {});
+    const outVals = outLabels.map(k => stats.by_outcome[k]);
+    if (outcomeChart) outcomeChart.destroy();
+    outcomeChart = new Chart($('outcomeChart'), {
+      type: 'bar',
+      data: {labels: outLabels.map(l => l.charAt(0).toUpperCase() + l.slice(1)),
+        datasets: [{data: outVals, backgroundColor: '#00A1E4',
+          borderRadius: 6, maxBarThickness: 48}]},
+      options: {responsive: true, maintainAspectRatio: false,
+        plugins: {legend: {display: false}},
+        scales: {y: {beginAtZero: true, ticks: {stepSize: 1}}}}
+    });
+  } catch (e) { console.error(e); }
+}
+
+async function loadUsers() {
+  try {
+    const data = await fetch("/api/admin/users").then(r => r.json());
+    let html = '<table class="history-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr></thead><tbody>';
+    for (const u of data.users) {
+      html += `<tr><td>${u.full_name}</td><td>${u.email}</td><td><span class="state-badge">${u.role}</span></td><td>${u.is_active ? 'Active' : 'Inactive'}</td></tr>`;
+    }
+    $("userList").innerHTML = html + '</tbody></table>';
+  } catch (e) { console.error(e); }
+}
+
+async function loadAuditLog() {
+  try {
+    const data = await fetch("/api/admin/audit?limit=50").then(r => r.json());
+    let html = '<table class="history-table"><thead><tr><th>Time</th><th>Action</th><th>User</th></tr></thead><tbody>';
+    for (const l of data.logs) {
+      const t = l.timestamp ? new Date(l.timestamp).toLocaleString() : '—';
+      html += `<tr><td>${t}</td><td>${l.action}</td><td>${l.full_name || l.email || 'System'}</td></tr>`;
+    }
+    $("auditLog").innerHTML = html + '</tbody></table>';
+  } catch (e) { console.error(e); }
+}
+
+function openUserModal() { $('userModal').classList.add('open'); }
+function closeUserModal() {
+  $('userModal').classList.remove('open');
+  ['newUserName','newUserEmail','newUserPassword'].forEach(id => $(id).value = '');
+}
+
+async function createUser() {
+  const name = $('newUserName').value, email = $('newUserEmail').value,
+        pw = $('newUserPassword').value, role = $('newUserRole').value;
+  if (!name || !email || !pw) { toast('Fill in all fields', 'error'); return; }
+  try {
+    const res = await fetch("/api/admin/users", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email, password: pw, full_name: name, role})
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || "Failed");
+    toast('User created', 'success');
+    closeUserModal();
+    loadUsers();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+/* ---------------- Profile dropdown & settings ---------------- */
+$('profileTrigger').addEventListener('click', e => {
+  e.stopPropagation();
+  const dd = $('profileDropdown');
+  if (dd.classList.contains('open')) { dd.classList.remove('open'); return; }
+  // populate
+  const name = localStorage.getItem('userName') || 'User';
+  const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2);
+  $('pdAvatar').textContent = initials || 'U';
+  $('pdName').textContent = name;
+  $('pdRole').textContent = localStorage.getItem('userRole') || '';
+  $('pdEmail').textContent = localStorage.getItem('userEmail') || '—';
+  $('pdHospital').textContent = localStorage.getItem('userHospital') || 'Not set';
+  const since = localStorage.getItem('userSince');
+  $('pdSince').textContent = since ? new Date(since).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+  dd.classList.add('open');
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.nav-user')) $('profileDropdown').classList.remove('open');
+});
+$('dropdownLogout').onclick = openLogoutModal;
+
+$('openSettingsBtn').onclick = () => {
+  $('profileDropdown').classList.remove('open');
+  $('setName').value = localStorage.getItem('userName') || '';
+  $('setHospital').value = localStorage.getItem('userHospital') || '';
+  $('setEmail').value = localStorage.getItem('userEmail') || '';
+  $('curPw').value = ''; $('newPw').value = '';
+  $('settingsModal').classList.add('open');
+};
+function closeSettingsModal() { $('settingsModal').classList.remove('open'); }
+
+async function saveProfile() {
+  const email = localStorage.getItem('userEmail');
+  const name = $('setName').value.trim();
+  const hospital = $('setHospital').value.trim();
+  if (!name) { toast('Name cannot be empty', 'error'); return; }
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(email)}/profile`, {
+      method: 'PATCH', headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({full_name: name, hospital})
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Update failed');
+    localStorage.setItem('userName', name);
+    localStorage.setItem('userHospital', hospital);
+    $('navUserName').textContent = name;
+    const initials = name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2);
+    $('navAvatar').textContent = initials || 'U';
+    toast('Profile updated', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function changePassword() {
+  const email = localStorage.getItem('userEmail');
+  const cur = $('curPw').value, nw = $('newPw').value;
+  if (!cur || !nw) { toast('Enter both passwords', 'error'); return; }
+  if (nw.length < 8) { toast('New password must be at least 8 characters', 'error'); return; }
+  try {
+    const res = await fetch('/api/users/password', {
+      method: 'POST', headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({email, current_password: cur, new_password: nw})
+    });
+    if (!res.ok) throw new Error((await res.json()).detail || 'Change failed');
+    $('curPw').value = ''; $('newPw').value = '';
+    toast('Password changed', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
 </script>
 </body>
 </html>

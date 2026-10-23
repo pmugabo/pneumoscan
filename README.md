@@ -4,11 +4,13 @@ Autonomous chest X-ray triage with a confidence gate.
 
 **Repository:** https://github.com/pmugabo/pneumoscan
 
-**Video demo:** https://youtu.be/uvaLALHW7H8 
+**Video demo:** https://youtu.be/uvaLALHW7H8
+
+**Technical Report:** [TECHNICAL_REPORT.md](TECHNICAL_REPORT.md)
 
 **Figma designs:** https://www.figma.com/design/t6tiMNBoyDIepkTpqvkuKu/Pneumoscan?node-id=7-2&t=GP7jf4vuSEDoHzb9-1
 
-**Author:** Mugabo Patricie 
+**Author:** Mugabo Patricie
 **Supervisor:** Emmanuel Adjei
 
 
@@ -361,7 +363,55 @@ use case, class, ERD, sequence.
    regions before classification.
 4. The gate trades specificity for sensitivity: on accepted cases specificity
    falls from 0.870 to 0.706.
-5. No authentication yet. The schema supports roles; login is not implemented.
+5. Authentication is implemented in the UI but not connected to a backend authentication system (demo mode).
 6. Binary classification only. No bacterial/viral distinction, no lesion
    localisation, no other thoracic disease.
+
+## Repository Structure
+
+```
+pneumoscan/
+├── backend/              # API and inference logic
+│   ├── __init__.py
+│   ├── main.py          # FastAPI endpoints and database operations
+│   └── inference.py     # Model loading, gate logic, Grad-CAM
+├── frontend/            # User interface
+│   └── index.html       # Single-page application with login, dashboard, history
+├── models/              # Trained model files
+│   ├── efficientnet_b0.pt       # EfficientNetB0 weights (16MB)
+│   ├── gate_params.json         # Gate configuration
+│   └── gate_stats.npz           # OOD detection statistics (13MB)
+├── samples/             # Test images for demonstration
+├── results/             # Training results and charts
+├── notebooks/           # Training notebook (Kaggle)
+├── docs/                # Documentation and screenshots
+├── tests/               # (Placeholder for future test suite)
+├── requirements.txt     # Python dependencies
+├── README.md            # This file
+└── TECHNICAL_REPORT.md  # Comprehensive technical documentation
+```
+
+## Technical Documentation
+
+For detailed information about:
+- Scope alignment and feature validation
+- Technical implementation details
+- Testing strategies and results
+- Code quality and OOP principles
+- Performance metrics and compatibility
+
+See the [Technical Report](TECHNICAL_REPORT.md).
+
+## Walkthrough Video
+
+A comprehensive walkthrough video demonstrating the core functionalities is available at:
+https://youtu.be/uvaLALHW7H8
+
+The video covers:
+- Login and authentication flow
+- Image upload and triage prediction
+- All four triage states (CLEARED, FLAGGED_URGENT, ESCALATED, REJECTED)
+- Grad-CAM heatmap generation
+- History and statistics
+- API documentation and usage
 

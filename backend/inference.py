@@ -87,7 +87,7 @@ class Engine:
             return
 
         self.model = self._build(self.arch)
-        state = torch.load(weights, map_location="cpu")
+        state = torch.load(weights, map_location="cpu", weights_only=True)
         self.model.load_state_dict(state)
         self.model.eval()
 
