@@ -5,3 +5,8 @@ pneumoscan.db
 models/*.pt
 models/*.npz
 .DS_Store
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
+firebase-web-config.json
+firebase-debug.log
+firestore-debug.log
