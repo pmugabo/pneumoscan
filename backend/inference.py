@@ -194,18 +194,19 @@ class Engine:
                 "This image is unlike the radiographs the model was trained on. "
                 "Check that it is a paediatric chest X-ray of adequate quality, "
                 "or send it for specialist review.")
-            heat = None
         elif conf < gate_conf:
             state, reason = "ESCALATED", (
                 "The model is not confident enough to decide this case. "
-                "Route it to a specialist for review.")
-            heat = None
+                "Route it to a specialist for review. The heatmap shows where the "
+                "model looked, but its reading should not be relied on.")
         else:
             is_pneu = prob >= 0.5
             state = "FLAGGED_URGENT" if is_pneu else "CLEARED"
             reason = ("Findings consistent with pneumonia. Prioritise clinical "
                       "assessment and treatment." if is_pneu else
                       "No pneumonia detected. No specialist review required.")
+        heat = None
+        if state != "REJECTED":
             w = store["grad"].mean(dim=(2, 3), keepdim=True)
             cam = F.relu((w * store["act"]).sum(1, keepdim=True))
             cam = F.interpolate(cam, (IMG_SIZE, IMG_SIZE), mode="bilinear",
