@@ -4,6 +4,7 @@ Generates downloadable PDF reports for triage decisions.
 """
 from io import BytesIO
 from datetime import datetime
+from reportlab.lib.units import inch
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet
@@ -41,11 +42,12 @@ def generate_report(prediction_data: dict) -> BytesIO:
     # Patient info
     story.append(Paragraph("<b>Patient Information:</b>", styles["Heading2"]))
     data = [
+        ["Patient:", prediction_data.get("patient_name") or prediction_data.get("patient_id") or "N/A"],
         ["File Name:", prediction_data.get("filename", "N/A")],
         ["Date:", prediction_data.get("created_at", "N/A")[:10] if prediction_data.get("created_at") else "N/A"],
         ["Time:", prediction_data.get("created_at", "N/A")[11:19] if prediction_data.get("created_at") else "N/A"]
     ]
-    table = Table(data, colWidths=[2, 4])
+    table = Table(data, colWidths=[1.5 * inch, 4 * inch])
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (0, -1), colors.grey),
         ('TEXTCOLOR', (0, 0), (0, -1), colors.whitesmoke),
@@ -58,7 +60,11 @@ def generate_report(prediction_data: dict) -> BytesIO:
     # Triage decision
     story.append(Paragraph("<b>Triage Decision:</b>", styles["Heading2"]))
     story.append(Paragraph(f"<b>State:</b> {prediction_data.get('triage_state', 'N/A')}", styles["Normal"]))
-    story.append(Paragraph(f"<b>Predicted Class:</b> {prediction_data.get('confirmed_outcome', 'N/A')}", styles["Normal"]))
+    predicted = {"FLAGGED_URGENT": "Pneumonia", "CLEARED": "Normal",
+                 "ESCALATED": "Uncertain (referred to specialist)",
+                 "REJECTED": "Not assessed (input rejected)"}.get(prediction_data.get("triage_state"), "N/A")
+    story.append(Paragraph(f"<b>Predicted Class:</b> {predicted}", styles["Normal"]))
+    story.append(Paragraph(f"<b>Confirmed Outcome:</b> {prediction_data.get('confirmed_outcome') or 'Not yet confirmed'}", styles["Normal"]))
     story.append(Spacer(1, 12))
     
     # Metrics
@@ -68,7 +74,7 @@ def generate_report(prediction_data: dict) -> BytesIO:
         ["OOD Score:", f"{prediction_data.get('ood_score', 0):.1f}"],
         ["Model Version:", prediction_data.get('model_version', 'N/A')]
     ]
-    metrics_table = Table(metrics, colWidths=[3, 3])
+    metrics_table = Table(metrics, colWidths=[2 * inch, 3.5 * inch])
     metrics_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),

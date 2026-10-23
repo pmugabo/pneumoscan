@@ -8,6 +8,8 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <style>
   :root{
     --blue:#2563EB;
@@ -1093,6 +1095,61 @@ const ICONS = {
 
 const STATE_ICONS = {CLEARED:'check', FLAGGED_URGENT:'alert', ESCALATED:'question', REJECTED:'ban'};
 
+/* ---------------- Firebase ---------------- */
+let fbAuth = null;
+const fbReady = fetch('/api/firebase-config')
+  .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(new Error(d.detail))))
+  .then(cfg => {
+    firebase.initializeApp(cfg);
+    fbAuth = firebase.auth();
+    if (cfg.authEmulatorUrl) fbAuth.useEmulator(cfg.authEmulatorUrl, {disableWarnings: true});
+    return fbAuth;
+  });
+fbReady.catch(err => toast('Sign-in unavailable: ' + err.message, 'error'));
+
+async function api(url, opts = {}) {
+  await fbReady;
+  const headers = {...(opts.headers || {})};
+  if (fbAuth.currentUser) headers.Authorization = 'Bearer ' + await fbAuth.currentUser.getIdToken();
+  return fetch(url, {...opts, headers});
+}
+
+const AUTH_ERRORS = {
+  'auth/invalid-credential': 'Incorrect email or password',
+  'auth/wrong-password': 'Incorrect email or password',
+  'auth/user-not-found': 'Incorrect email or password',
+  'auth/invalid-email': 'Enter a valid email address',
+  'auth/email-already-in-use': 'Email already registered',
+  'auth/weak-password': 'Password must be at least 8 characters',
+  'auth/too-many-requests': 'Too many attempts. Try again later',
+  'auth/requires-recent-login': 'Sign in again before changing your password'
+};
+const authMessage = err => AUTH_ERRORS[err.code] || err.message;
+
+async function loadProfile() {
+  const res = await api('/api/auth/me');
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.detail || 'Could not load profile');
+  return data;
+}
+
+function enterApp(user, greeting) {
+  applySession(user);
+  if (greeting) toast(greeting, 'success');
+  showPage(landingPage());
+  loadModelInfo();
+  loadPatientsDropdown();
+}
+
+// Restore the session after a page reload
+fbReady.then(a => {
+  const unsub = a.onAuthStateChanged(async u => {
+    unsub();
+    if (!u) return;
+    try { enterApp(await loadProfile()); } catch (e) { /* stay on welcome page */ }
+  });
+});
+
 /* ---------------- Toast ---------------- */
 function toast(msg, type='') {
   const t = $('toast');
@@ -1197,19 +1254,14 @@ $('loginForm').addEventListener('submit', async e => {
   const email = $('loginForm').querySelector('input[type="email"]').value;
   const password = $('loginForm').querySelector('input[type="password"]').value;
   try {
-    const res = await fetch("/api/auth/login", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({email, password})
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.detail || "Login failed");
-    applySession(data.user);
-    toast(`Welcome back, ${data.user.full_name}`, 'success');
-    showPage(landingPage());
-    loadModelInfo();
-    loadPatientsDropdown();
+    await fbReady;
+    await fbAuth.signInWithEmailAndPassword(email, password);
+    let user;
+    try { user = await loadProfile(); }
+    catch (e) { await fbAuth.signOut(); throw e; }
+    enterApp(user, `Welcome back, ${user.full_name}`);
   } catch (err) {
-    toast(err.message, 'error');
+    toast(authMessage(err), 'error');
   }
 });
 
@@ -1221,25 +1273,17 @@ $('signupForm').addEventListener('submit', async e => {
   if (pw1 !== pw2) { toast('Passwords do not match', 'error'); return; }
   if (pw1.length < 8) { toast('Password must be at least 8 characters', 'error'); return; }
   try {
-    const res = await fetch("/api/auth/register", {
+    await fbReady;
+    await fbAuth.createUserWithEmailAndPassword(email, pw1);
+    const res = await api("/api/auth/register", {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({email, password: pw1, full_name: name, hospital: hospital || null})
+      body: JSON.stringify({full_name: name, hospital: hospital || null})
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Registration failed");
-    // auto-login
-    const loginRes = await fetch("/api/auth/login", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({email, password: pw1})
-    });
-    const loginData = await loginRes.json();
-    applySession(loginData.user);
-    toast(`Account created. Welcome, ${name}`, 'success');
-    showPage(landingPage());
-    loadModelInfo();
-    loadPatientsDropdown();
+    enterApp(data, `Account created. Welcome, ${name}`);
   } catch (err) {
-    toast(err.message, 'error');
+    toast(authMessage(err), 'error');
   }
 });
 
@@ -1248,6 +1292,7 @@ function closeLogoutModal() { $('logoutModal').classList.remove('open'); }
 
 function doLogout() {
   closeLogoutModal();
+  if (fbAuth) fbAuth.signOut();
   localStorage.clear();
   userId = null; userRole = 'clinician';
   $('loginForm').reset(); $('signupForm').reset();
@@ -1279,7 +1324,7 @@ async function createPatient() {
   const name = $('patientName').value.trim();
   if (!name) { toast('Patient name is required', 'error'); return; }
   try {
-    const res = await fetch(`/api/patients?user_id=${localStorage.getItem('userId') || ''}`, {
+    const res = await api(`/api/patients`, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         full_name: name,
@@ -1300,7 +1345,7 @@ async function createPatient() {
 }
 
 async function loadPatientsDropdown(selectId) {
-  const res = await fetch("/api/patients").then(r => r.json());
+  const res = await api("/api/patients").then(r => r.json());
   const sel = $('patientSelect');
   sel.innerHTML = '<option value="">— Select a patient —</option>' +
     res.patients.map(p => `<option value="${p.patient_id}">${p.full_name} (${p.patient_id})</option>`).join('');
@@ -1308,8 +1353,7 @@ async function loadPatientsDropdown(selectId) {
 }
 
 async function loadPatients() {
-  const specParam = userRole === 'specialist' ? `?specialist_id=${localStorage.getItem('userId')}` : '';
-  const res = await fetch(`/api/patients${specParam}`).then(r => r.json());
+  const res = await api(`/api/patients`).then(r => r.json());
   if (!res.patients.length) {
     $('patientList').innerHTML = `
       <div class="empty-state">
@@ -1338,7 +1382,7 @@ async function loadPatients() {
 }
 
 async function openPatientDetail(patientId) {
-  const res = await fetch(`/api/patients/${patientId}`).then(r => r.json());
+  const res = await api(`/api/patients/${patientId}`).then(r => r.json());
   const p = res.patient;
   const initials = p.full_name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0,2);
   const meta = [
@@ -1441,7 +1485,7 @@ $("run").onclick = async () => {
   const body = new FormData();
   body.append("file", chosen);
   try {
-    const res = await fetch(`/api/predict?patient_id=${encodeURIComponent(patientId)}&user_id=${localStorage.getItem('userId') || ''}`, {method:"POST", body});
+    const res = await api(`/api/predict?patient_id=${encodeURIComponent(patientId)}`, {method:"POST", body});
     if (!res.ok) throw new Error((await res.json()).detail || "request failed");
     render(await res.json());
     loadHistory();
@@ -1500,7 +1544,7 @@ function render(d){
 
 async function sendFb(outcome, btn){
   if (!lastId) return;
-  await fetch(`/api/feedback?user_id=${localStorage.getItem('userId') || ''}`, {
+  await api(`/api/feedback`, {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({prediction_id:lastId, confirmed_outcome:outcome, comment:""})
   });
@@ -1510,7 +1554,13 @@ async function sendFb(outcome, btn){
   loadHistory();
 }
 
-function downloadReport(pid){ window.open(`/api/report/${pid}`, '_blank'); }
+async function downloadReport(pid){
+  const res = await api(`/api/report/${pid}`);
+  if (!res.ok) { toast('Could not generate report', 'error'); return; }
+  const url = URL.createObjectURL(await res.blob());
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
 
 /* ---------------- Escalation ---------------- */
 async function openEscalateModal() {
@@ -1518,7 +1568,7 @@ async function openEscalateModal() {
   const sel = $('specialistSelect');
   sel.innerHTML = '<option value="">Loading specialists…</option>';
   try {
-    const data = await fetch("/api/specialists").then(r => r.json());
+    const data = await api("/api/specialists").then(r => r.json());
     sel.innerHTML = '<option value="">— Choose a specialist —</option>' +
       data.specialists.map(s =>
         `<option value="${s.user_id}" ${s.is_active ? '' : 'disabled'}>${s.full_name}` +
@@ -1535,9 +1585,9 @@ async function sendEscalation() {
   const specialistId = $('specialistSelect').value;
   if (!specialistId) { toast('Please choose a specialist', 'error'); return; }
   try {
-    const res = await fetch(`/api/escalations?user_id=${localStorage.getItem('userId') || ''}`, {
+    const res = await api(`/api/escalations`, {
       method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({prediction_id: lastId, specialist_id: parseInt(specialistId), note: $('escalationNote').value})
+      body: JSON.stringify({prediction_id: lastId, specialist_id: specialistId, note: $('escalationNote').value})
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Escalation failed");
@@ -1552,8 +1602,7 @@ async function sendEscalation() {
 const ESC_STATUS = {sent:'Sent', pending:'Pending', resolved:'Response given'};
 
 async function loadSentCases() {
-  const uid = localStorage.getItem('userId');
-  const res = await fetch(`/api/escalations?created_by=${uid}`).then(r => r.json());
+  const res = await api(`/api/escalations`).then(r => r.json());
   if (!res.escalations.length) {
     $('sentList').innerHTML = `
       <div class="empty-state">
@@ -1595,8 +1644,7 @@ async function loadSentCases() {
 
 /* ---------------- Specialist queue ---------------- */
 async function loadQueue() {
-  const uid = localStorage.getItem('userId');
-  const res = await fetch(`/api/escalations?assigned_to=${uid}`).then(r => r.json());
+  const res = await api(`/api/escalations`).then(r => r.json());
   $('qAwaiting').textContent = res.escalations.filter(e => e.status === 'sent').length;
   $('qInReview').textContent = res.escalations.filter(e => e.status === 'pending').length;
   $('qResolved').textContent = res.escalations.filter(e => e.status === 'resolved').length;
@@ -1654,7 +1702,7 @@ function viewImage(src, caption) {
 function closeImageModal() { $('imageModal').classList.remove('open'); }
 
 async function startReview(escId) {
-  await fetch(`/api/escalations/${escId}/start?user_id=${localStorage.getItem('userId') || ''}`, {method:'POST'});
+  await api(`/api/escalations/${escId}/start`, {method:'POST'});
   loadQueue();
 }
 
@@ -1666,7 +1714,7 @@ async function resolveEscalation() {
   const comment = $('resolveComment').value;
   if (!comment.trim()) { toast('Please add a review comment', 'error'); return; }
   try {
-    const res = await fetch(`/api/escalations/${currentEscalationId}/resolve?user_id=${localStorage.getItem('userId') || ''}`, {
+    const res = await api(`/api/escalations/${currentEscalationId}/resolve`, {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({specialist_comment: comment, confirmed_outcome: outcome || null})
     });
@@ -1681,10 +1729,9 @@ async function resolveEscalation() {
 
 /* ---------------- History ---------------- */
 async function loadHistory(){
-  const specParam = userRole === 'specialist' ? `&specialist_id=${localStorage.getItem('userId')}` : '';
   const [cases, stats] = await Promise.all([
-    fetch(`/api/cases?limit=25${specParam}`).then(r => r.json()),
-    fetch("/api/stats").then(r => r.json())
+    api(`/api/cases?limit=25`).then(r => r.json()),
+    api("/api/stats").then(r => r.json())
   ]);
   if (!cases.count){
     $("history").innerHTML = `
@@ -1729,7 +1776,7 @@ const STATE_COLORS = {
 
 async function loadAdminStats() {
   try {
-    const stats = await fetch("/api/admin/stats").then(r => r.json());
+    const stats = await api("/api/admin/stats").then(r => r.json());
     $("totalPredictions").textContent = stats.total_predictions;
     $("autonomyRate").textContent = stats.autonomy_rate ? (stats.autonomy_rate*100).toFixed(0)+"%" : "—";
     $("abstentionRate").textContent = stats.abstention_rate ? (stats.abstention_rate*100).toFixed(0)+"%" : "—";
@@ -1772,7 +1819,7 @@ async function loadAdminStats() {
 
 async function loadUsers() {
   try {
-    const data = await fetch("/api/admin/users").then(r => r.json());
+    const data = await api("/api/admin/users").then(r => r.json());
     let html = '<table class="history-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th></tr></thead><tbody>';
     for (const u of data.users) {
       html += `<tr><td>${u.full_name}</td><td>${u.email}</td><td><span class="state-badge">${u.role}</span></td><td>${u.is_active ? 'Active' : 'Inactive'}</td></tr>`;
@@ -1783,7 +1830,7 @@ async function loadUsers() {
 
 async function loadAuditLog() {
   try {
-    const data = await fetch("/api/admin/audit?limit=50").then(r => r.json());
+    const data = await api("/api/admin/audit?limit=50").then(r => r.json());
     let html = '<table class="history-table"><thead><tr><th>Time</th><th>Action</th><th>User</th></tr></thead><tbody>';
     for (const l of data.logs) {
       const t = l.timestamp ? new Date(l.timestamp).toLocaleString() : '—';
@@ -1804,7 +1851,7 @@ async function createUser() {
         pw = $('newUserPassword').value, role = $('newUserRole').value;
   if (!name || !email || !pw) { toast('Fill in all fields', 'error'); return; }
   try {
-    const res = await fetch("/api/admin/users", {
+    const res = await api("/api/admin/users", {
       method: "POST", headers: {"Content-Type": "application/json"},
       body: JSON.stringify({email, password: pw, full_name: name, role})
     });
@@ -1850,12 +1897,11 @@ $('openSettingsBtn').onclick = () => {
 function closeSettingsModal() { $('settingsModal').classList.remove('open'); }
 
 async function saveProfile() {
-  const email = localStorage.getItem('userEmail');
   const name = $('setName').value.trim();
   const hospital = $('setHospital').value.trim();
   if (!name) { toast('Name cannot be empty', 'error'); return; }
   try {
-    const res = await fetch(`/api/users/${encodeURIComponent(email)}/profile`, {
+    const res = await api(`/api/users/me/profile`, {
       method: 'PATCH', headers: {"Content-Type": "application/json"},
       body: JSON.stringify({full_name: name, hospital})
     });
@@ -1872,20 +1918,19 @@ async function saveProfile() {
 }
 
 async function changePassword() {
-  const email = localStorage.getItem('userEmail');
   const cur = $('curPw').value, nw = $('newPw').value;
   if (!cur || !nw) { toast('Enter both passwords', 'error'); return; }
   if (nw.length < 8) { toast('New password must be at least 8 characters', 'error'); return; }
   try {
-    const res = await fetch('/api/users/password', {
-      method: 'POST', headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({email, current_password: cur, new_password: nw})
-    });
-    if (!res.ok) throw new Error((await res.json()).detail || 'Change failed');
+    const u = fbAuth.currentUser;
+    const cred = firebase.auth.EmailAuthProvider.credential(u.email, cur);
+    await u.reauthenticateWithCredential(cred);
+    await u.updatePassword(nw);
     $('curPw').value = ''; $('newPw').value = '';
     toast('Password changed', 'success');
   } catch (err) {
-    toast(err.message, 'error');
+    toast(err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password'
+      ? 'Current password is incorrect' : authMessage(err), 'error');
   }
 }
 </script>
