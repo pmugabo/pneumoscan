@@ -347,9 +347,15 @@ def get_patient(patient_id: str, user: dict = Depends(current_user)):
         raise HTTPException(404, "Patient not found")
     preds = [doc_dict(s, "prediction_id") for s in
              col("predictions").where(filter=FieldFilter("patient_id", "==", patient_id)).stream()]
-    preds.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     escs = [doc_dict(s, "escalation_id") for s in
             col("escalations").where(filter=FieldFilter("patient_id", "==", patient_id)).stream()]
+    if user["role"] == "specialist":
+        escs = [e for e in escs if e.get("assigned_to") == user["user_id"]]
+        if not escs:
+            raise HTTPException(404, "Patient not found")
+        mine = {e["prediction_id"] for e in escs}
+        preds = [p for p in preds if p["prediction_id"] in mine]
+    preds.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     specialists = get_many("users", [e.get("assigned_to") for e in escs], "user_id")
     for e in escs:
         s = specialists.get(e.get("assigned_to"))
@@ -518,8 +524,18 @@ def generate_report_endpoint(prediction_id: str, user: dict = Depends(current_us
     snap = col("predictions").document(prediction_id).get()
     if not snap.exists:
         raise HTTPException(404, "Prediction not found")
+    if user["role"] == "specialist" and not any(
+            e.get("assigned_to") == user["user_id"] for e in
+            (s.to_dict() for s in col("escalations").where(
+                filter=FieldFilter("prediction_id", "==", prediction_id)).stream())):
+        raise HTTPException(404, "Prediction not found")
+    data = doc_dict(snap, "prediction_id")
+    if data.get("patient_id"):
+        patient = col("patients").document(data["patient_id"]).get()
+        if patient.exists:
+            data["patient_name"] = patient.to_dict().get("full_name")
     try:
-        buffer = generate_report(doc_dict(snap, "prediction_id"))
+        buffer = generate_report(data)
     except Exception as e:
         raise HTTPException(500, f"Failed to generate report: {e}")
     return Response(content=buffer.getvalue(), media_type="application/pdf",

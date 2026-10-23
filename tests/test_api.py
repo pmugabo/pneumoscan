@@ -134,6 +134,10 @@ def test_escalation_workflow(clinician, specialist, admin):
     assert client.get("/api/escalations", headers=other["headers"]).json()["escalations"] == []
     assert client.post(f"/api/escalations/{esc_id}/start",
                        headers=other["headers"]).status_code == 403
+    assert client.get(f"/api/patients/{pat['patient_id']}",
+                      headers=other["headers"]).status_code == 404
+    assert client.get(f"/api/report/{pid}", headers=other["headers"]).status_code == 404
+    assert client.get(f"/api/report/{pid}", headers=specialist["headers"]).status_code == 200
     pats = client.get("/api/patients", headers=specialist["headers"]).json()["patients"]
     assert [p["patient_id"] for p in pats] == [pat["patient_id"]]
 
