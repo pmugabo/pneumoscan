@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · PneumoScan</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'><path d='M12 3v8M7.5 6C5 7 3 11 3 16c0 2.5 1.5 4 3.5 4S10 19 10 16v-5.5C10 8 9 6 7.5 6zM16.5 6C19 7 21 11 21 16c0 2.5-1.5 4-3.5 4S14 19 14 16v-5.5C14 8 15 6 16.5 6z'/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/assets/style.css?v=2">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="/static/assets/core.js?v=2"></script>
+</head>
+<body>
+<div class="auth">
+  <aside class="auth-art" id="art"></aside>
+  <main class="auth-form">
+    <div class="row" style="position:absolute;top:20px;right:24px">
+      <button class="icon-btn" id="themeBtn" title="Toggle light/dark mode" aria-label="Toggle theme"></button>
+    </div>
+    <div class="box">
+      <a href="/" class="brand" style="padding:0 0 28px"><span class="logo"></span>PneumoScan</a>
+      <div id="portalTag" class="eyebrow"></div>
+      <h1 id="title" style="margin-top:14px"></h1>
+      <p class="muted" id="subtitle" style="margin:6px 0 22px"></p>
+
+      <div class="seg" id="modeSeg" style="margin-bottom:18px">
+        <button type="button" data-mode="signin" class="on">Sign in</button>
+        <button type="button" data-mode="signup">Create account</button>
+      </div>
+
+      <div id="err" class="form-error hidden" role="alert"></div>
+      <div id="note" class="form-note hidden"></div>
+
+      <form id="signin" class="stack" style="margin-top:14px" novalidate>
+        <div class="field"><label for="siEmail">Email</label>
+          <input class="input" id="siEmail" type="email" autocomplete="username" required placeholder="name@hospital.rw"></div>
+        <div class="field"><div class="row"><label for="siPass">Password</label><span class="spacer"></span>
+          <a href="#" id="forgot" class="small">Forgot password?</a></div>
+          <div class="input-wrap"><input class="input" id="siPass" type="password" autocomplete="current-password" required placeholder="••••••••">
+            <button type="button" class="reveal" data-for="siPass">Show</button></div></div>
+        <button class="btn lg block" id="siBtn" type="submit"></button>
+      </form>
+
+      <form id="signup" class="stack hidden" style="margin-top:14px" novalidate>
+        <div class="field"><label for="suName">Full name</label>
+          <input class="input" id="suName" required placeholder="Dr. Jane Uwase" autocomplete="name"></div>
+        <div class="field"><label for="suHosp">Health facility</label>
+          <input class="input" id="suHosp" placeholder="e.g. Kibagabaga District Hospital" autocomplete="organization"></div>
+        <div class="field"><label for="suEmail">Work email</label>
+          <input class="input" id="suEmail" type="email" required placeholder="name@hospital.rw" autocomplete="email"></div>
+        <div class="field"><label for="suPass">Password</label>
+          <div class="input-wrap"><input class="input" id="suPass" type="password" minlength="8" required placeholder="At least 8 characters" autocomplete="new-password">
+            <button type="button" class="reveal" data-for="suPass">Show</button></div></div>
+        <button class="btn lg block" id="suBtn" type="submit">Create clinician account</button>
+        <p class="small muted">New accounts are clinician accounts. Specialist and administrator accounts are issued by your administrator.</p>
+      </form>
+
+      <div id="switches"></div>
+    </div>
+  </main>
+</div>
+<script>
+const PORTALS = {
+  clinician: {
+    tag: 'Clinician portal', title: 'Welcome back', subtitle: 'Sign in to triage chest radiographs and refer uncertain cases.',
+    art: ['Same-visit chest X-ray triage', 'Upload a radiograph, get a calibrated decision in seconds, and route uncertain cases to a paediatric specialist.'],
+    points: ['Calibrated confidence with an explicit safety gate', 'Grad-CAM heatmaps on every decided case', 'One-click referral with priority and notes'],
+  },
+  specialist: {
+    tag: 'Specialist portal', title: 'Specialist sign-in', subtitle: 'Review referred radiographs and record your diagnosis.',
+    art: ['Your referral queue, prioritised', 'Urgent cases first, waiting times at a glance, and a review workspace built for fast, documented decisions.'],
+    points: ['Queue sorted by priority and waiting time', 'Side-by-side radiograph and heatmap viewer', 'Your decisions feed the model\'s agreement audit'],
+  },
+  admin: {
+    tag: 'Administration', title: 'Administrator sign-in', subtitle: 'Manage accounts, monitor the model and review the audit trail.',
+    art: ['Oversight for safe deployment', 'Track autonomy and escalation rates against the validated baseline and keep a full audit trail of every decision.'],
+    points: ['Live model monitoring against test-set results', 'Account and role management', 'Searchable, exportable audit log'],
+  },
+};
+const role = location.pathname.startsWith('/specialist') ? 'specialist' : location.pathname.startsWith('/admin') ? 'admin' : 'clinician';
+const P = PORTALS[role];
+document.documentElement.dataset.role = role;
+document.title = `${P.tag} · PneumoScan`;
+document.querySelector('.brand .logo').innerHTML = icon('logo');
+$('portalTag').innerHTML = icon(role === 'specialist' ? 'steth' : role === 'admin' ? 'shield' : 'clipboard', 14) + P.tag;
+$('title').textContent = P.title;
+$('subtitle').textContent = P.subtitle;
+$('siBtn').textContent = role === 'clinician' ? 'Sign in' : `Sign in as ${ROLE_NAME[role].toLowerCase()}`;
+$('art').innerHTML = `<div class="brand" style="color:#fff;padding:0"><span class="logo" style="background:rgba(255,255,255,.18)">${icon('logo')}</span>PneumoScan</div>
+  <h2>${P.art[0]}</h2><p>${P.art[1]}</p>
+  <ul>${P.points.map(p => `<li>${icon('tick')}<span>${p}</span></li>`).join('')}</ul>
+  <p class="small" style="opacity:.7;margin-top:0">Research prototype · decision support only · not a certified medical device</p>`;
+if (role !== 'clinician') $('modeSeg').classList.add('hidden');
+
+const sw = (ico, text, href, link) => `<div class="auth-switch"><span class="ico">${icon(ico)}</span>
+  <div style="flex:1"><div style="font-weight:700;font-size:13.5px">${text}</div></div><a class="btn sm secondary" href="${href}">${link}</a></div>`;
+$('switches').innerHTML = role === 'clinician'
+  ? sw('steth', 'Specialist? Sign in here', '/specialist/login', 'Specialist sign-in') +
+    `<p class="small muted" style="margin-top:14px;text-align:center"><a href="/admin/login">Administrator access</a></p>`
+  : sw('clipboard', 'Are you a clinician?', '/login', 'Clinician sign-in');
+
+const renderTheme = () => $('themeBtn').innerHTML = icon(isDark() ? 'sun' : 'moon');
+$('themeBtn').onclick = () => { toggleTheme(); renderTheme(); };
+renderTheme();
+
+document.querySelectorAll('.reveal').forEach(b => b.onclick = () => {
+  const inp = $(b.dataset.for);
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  b.textContent = inp.type === 'password' ? 'Show' : 'Hide';
+});
+document.querySelectorAll('#modeSeg button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+function setMode(mode) {
+  document.querySelectorAll('#modeSeg button').forEach(x => x.classList.toggle('on', x.dataset.mode === mode));
+  $('signin').classList.toggle('hidden', mode !== 'signin');
+  $('signup').classList.toggle('hidden', mode !== 'signup');
+  $('title').textContent = mode === 'signup' ? 'Create your account' : P.title;
+  showErr('');
+}
+function showErr(msg) { $('err').textContent = msg; $('err').classList.toggle('hidden', !msg); if (msg) $('note').classList.add('hidden'); }
+function showNote(msg) { $('note').textContent = msg; $('note').classList.toggle('hidden', !msg); if (msg) $('err').classList.add('hidden'); }
+
+/* A session with the wrong role is signed out; one with the right role goes straight in. */
+let working = false;
+function mismatch(actual) {
+  const where = {clinician: 'the clinician sign-in page', specialist: 'the specialist sign-in page', admin: 'administrator access'}[actual];
+  return `This is the ${P.tag.toLowerCase()}, but this is a ${ROLE_NAME[actual].toLowerCase()} account. Please use ${where}.`;
+}
+async function enter() {
+  const me = await loadProfile();
+  if (me.role !== role) {
+    await fbAuth.signOut();
+    const e = new Error(mismatch(me.role));
+    e.href = ROLE_LOGIN[me.role];
+    throw e;
+  }
+  location.replace(ROLE_HOME[role]);
+}
+authUser().then(u => { if (u && !working) enter().catch(() => fbAuth.signOut()); }).catch(() => {});
+
+$('signin').onsubmit = async e => {
+  e.preventDefault();
+  if (working) return;
+  const email = $('siEmail').value.trim(), pass = $('siPass').value;
+  if (!email || !pass) return showErr('Enter your email and password.');
+  working = true; showErr('');
+  try {
+    await withBusy($('siBtn'), 'Signing in…', async () => {
+      await fbReady;
+      await fbAuth.signInWithEmailAndPassword(email, pass);
+      await enter();
+    });
+  } catch (err) {
+    working = false;
+    showErr(err.code ? authMessage(err) : err.message);
+    if (err.href) $('err').insertAdjacentHTML('beforeend', ` <a href="${err.href}" style="font-weight:700">Go there →</a>`);
+  }
+};
+
+$('signup').onsubmit = async e => {
+  e.preventDefault();
+  if (working) return;
+  const name = $('suName').value.trim(), hosp = $('suHosp').value.trim(), email = $('suEmail').value.trim(), pass = $('suPass').value;
+  if (!name || !email) return showErr('Enter your name and email.');
+  if (pass.length < 8) return showErr('Password must be at least 8 characters.');
+  working = true; showErr('');
+  try {
+    await withBusy($('suBtn'), 'Creating account…', async () => {
+      await fbReady;
+      const cred = await fbAuth.createUserWithEmailAndPassword(email, pass);
+      await cred.user.updateProfile({displayName: name});
+      await apiJSON('/api/auth/register', {method: 'POST', json: {full_name: name, hospital: hosp || null}});
+      location.replace('/clinician');
+    });
+  } catch (err) { working = false; showErr(err.code ? authMessage(err) : err.message); }
+};
+
+$('forgot').onclick = async e => {
+  e.preventDefault();
+  const email = $('siEmail').value.trim();
+  if (!email) return showErr('Enter your email above, then click "Forgot password?".');
+  try { await fbReady; await fbAuth.sendPasswordResetEmail(email); showNote(`If ${email} has an account, a reset link is on its way.`); }
+  catch (err) { showErr(authMessage(err)); }
+};
+</script>
+</body>
+</html>
