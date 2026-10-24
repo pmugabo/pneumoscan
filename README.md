@@ -6,7 +6,7 @@ Autonomous chest X-ray triage with a confidence gate.
 
 **Video demo:** https://youtu.be/uvaLALHW7H8
 
-**Technical Report:** [TECHNICAL_REPORT.md](TECHNICAL_REPORT.md)
+**Technical Report:** [Technical_Report.pdf](docs/Technical_Report.pdf)
 
 **Figma designs:** https://www.figma.com/design/t6tiMNBoyDIepkTpqvkuKu/Pneumoscan?node-id=7-2&t=GP7jf4vuSEDoHzb9-1
 
@@ -436,7 +436,7 @@ pneumoscan/
 ├── tests/               # (Placeholder for future test suite)
 ├── requirements.txt     # Python dependencies
 ├── README.md            # This file
-└── TECHNICAL_REPORT.md  # Comprehensive technical documentation
+└── docs/Technical_Report.pdf  # Technical report
 ```
 
 ## Technical Documentation
@@ -448,7 +448,7 @@ For detailed information about:
 - Code quality and OOP principles
 - Performance metrics and compatibility
 
-See the [Technical Report](TECHNICAL_REPORT.md).
+See the [Technical Report (PDF)](docs/Technical_Report.pdf).
 
 ## Walkthrough Video
 
