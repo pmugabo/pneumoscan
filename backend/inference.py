@@ -97,8 +97,9 @@ class Engine:
             self.precision = st["precision"]
 
         self.demo = False
+        t_pneu, t_norm = self.thresholds()
         print(f"[engine] loaded {self.arch}  T={self.gate['temperature']:.3f}  "
-              f"conf>={self.gate['confidence_threshold']:.3f}  "
+              f"pneumonia>={t_pneu:.3f}  normal<={t_norm:.3f}  "
               f"dist<={self.gate['distance_threshold']:.1f}")
 
     @staticmethod
@@ -182,8 +183,8 @@ class Engine:
             feat = self._embed(x).numpy()
         dist = self.mahalanobis(feat)
 
-        conf_thr = self.gate["confidence_threshold"]
-        gate_conf = max(conf_thr, 1 - conf_thr)
+        t_pneu, t_norm = self.thresholds()
+        gate_conf = t_pneu if prob >= 0.5 else 1 - t_norm
         dist_thr = self.gate.get("distance_threshold")
         if dist_thr is None:
             dist_thr = float("inf")
@@ -194,7 +195,7 @@ class Engine:
                 "This image is unlike the radiographs the model was trained on. "
                 "Check that it is a paediatric chest X-ray of adequate quality, "
                 "or send it for specialist review.")
-        elif conf < gate_conf:
+        elif t_norm < prob < t_pneu:
             state, reason = "ESCALATED", (
                 "The model is not confident enough to decide this case. "
                 "Route it to a specialist for review. The heatmap shows where the "
@@ -219,10 +220,18 @@ class Engine:
             label="Pneumonia" if prob >= 0.5 else "Normal",
             probability=prob, confidence=conf, ood_score=dist, reason=reason,
             heatmap_png=heat, model_version=f"{self.arch}",
-            thresholds={"confidence": gate_conf,
+            thresholds={"confidence": gate_conf, "pneumonia": t_pneu, "normal": t_norm,
                         "distance": None if not np.isfinite(dist_thr) else dist_thr,
                         "temperature": T},
             demo_mode=False)
+
+    def thresholds(self) -> tuple[float, float]:
+        """(pneumonia, normal) probability cut-offs. Older gate files had one symmetric
+        confidence threshold; newer ones fit each side separately on validation data."""
+        if "pneumonia_threshold" in self.gate and "normal_threshold" in self.gate:
+            return self.gate["pneumonia_threshold"], self.gate["normal_threshold"]
+        c = max(self.gate["confidence_threshold"], 1 - self.gate["confidence_threshold"])
+        return c, 1 - c
 
     def _demo_result(self) -> TriageResult:
         return TriageResult(

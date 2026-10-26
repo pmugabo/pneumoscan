@@ -43,7 +43,21 @@ async function adOverview() {
           <p class="muted small">of ${adMon.agreement.confirmed} confirmed case(s), the model's leaning matched the confirmed diagnosis.</p></div>
           <a class="btn sm secondary" style="margin-top:14px" href="#/monitoring">Open monitoring ${icon('arrow', 14)}</a>`
         : emptyState('target', 'No confirmed outcomes yet', 'Agreement appears once specialists or clinicians confirm diagnoses.'))}
-    </div>`;
+    </div>
+    <div style="margin-top:18px">${card('Send an announcement', `<form class="stack" onsubmit="adAnnounce(event)">
+        <div class="grid g-2-1" style="gap:12px"><div class="field"><label>Title</label><input class="input" id="anTitle" maxlength="80" placeholder="e.g. Scheduled maintenance tonight"></div>
+          <div class="field"><label>Audience</label><select class="input" id="anAud"><option value="all">Everyone</option><option value="clinician">Clinicians</option><option value="specialist">Specialists</option><option value="admin">Administrators</option></select></div></div>
+        <div class="field"><label>Message</label><textarea class="input" id="anBody" maxlength="500" placeholder="Appears in each recipient's notifications."></textarea></div>
+        <div class="row"><span class="small muted">Sent as an in-app notification to active accounts.</span><span class="spacer"></span><button class="btn" id="anBtn">${icon('megaphone', 16)}Send announcement</button></div></form>`)}</div>`;
+}
+async function adAnnounce(e) {
+  e.preventDefault();
+  const body = {title: $('anTitle').value.trim(), body: $('anBody').value.trim(), audience: $('anAud').value};
+  if (!body.title || !body.body) return toast('Add a title and a message', 'error');
+  await withBusy($('anBtn'), 'Sending…', async () => {
+    try { const r = await apiJSON('/api/admin/announce', {method: 'POST', json: body}); e.target.reset(); toast(`Announcement sent to ${r.sent} user(s)`, 'success'); }
+    catch (err) { toast(err.message, 'error'); }
+  });
 }
 function adOverviewCharts() {
   const c = chartColors(), sc = STATE_COLOR(c);
@@ -94,7 +108,8 @@ async function adMonitoring() {
           <div><div class="k">Median turnaround</div><div class="v">${duration(adMon.referrals.median_turnaround_h)}</div></div>
           <div><div class="k">Mean turnaround</div><div class="v">${duration(adMon.referrals.mean_turnaround_h)}</div></div></div>`)}
       ${card('Safety gate', `<div class="kv"><div><div class="k">Temperature</div><div class="v">${g.temperature != null ? g.temperature.toFixed(3) : '—'}</div></div>
-          <div><div class="k">Confidence gate</div><div class="v">${pct(g.confidence_threshold, 2)}</div></div>
+          <div><div class="k">Pneumonia if P ≥</div><div class="v">${(g.pneumonia_threshold ?? g.confidence_threshold)?.toFixed(4) ?? '—'}</div></div>
+          <div><div class="k">Normal if P ≤</div><div class="v">${(g.normal_threshold ?? (1 - g.confidence_threshold))?.toFixed(4) ?? '—'}</div></div>
           <div><div class="k">OOD distance limit</div><div class="v">${g.distance_threshold != null ? g.distance_threshold.toFixed(0) : '—'}</div></div>
           <div><div class="k">ECE after scaling</div><div class="v">${g.ece_after != null ? g.ece_after.toFixed(4) : '—'}</div></div></div>
           <p class="small muted" style="margin-top:12px">${esc(g.note || '')}</p>`)}

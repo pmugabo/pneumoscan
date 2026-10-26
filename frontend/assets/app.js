@@ -9,16 +9,33 @@ document.documentElement.dataset.role = ROLE;
 async function boot() {
   const user = await authUser().catch(() => null);
   if (!user) return location.replace(ROLE_LOGIN[ROLE]);
+  const gateReq = apiJSON('/api/model-info').catch(() => ({gate: {}}));
   try { ME = await loadProfile(); }
   catch (e) { await fbAuth.signOut(); return location.replace(ROLE_LOGIN[ROLE] + '?e=' + encodeURIComponent(e.message)); }
   if (ME.role !== ROLE) return location.replace(ROLE_HOME[ME.role]);   // never show another role's portal
+  GATE_INFO = (await gateReq).gate || {};
   buildShell();
   window.addEventListener('hashchange', route);
   route();
   $('boot').remove();
   $('shell').classList.remove('hidden');
   loadNotifications();
-  setInterval(loadNotifications, 60000);
+  setInterval(loadNotifications, 30000);
+  fbAuth.onAuthStateChanged(u => { if (!u) location.replace(ROLE_LOGIN[ROLE]); });
+  watchIdle();
+}
+
+/* Signs out after 30 minutes without interaction, with a warning 2 minutes before. */
+const IDLE_MS = 30 * 60 * 1000, WARN_MS = 28 * 60 * 1000;
+let lastActive = Date.now(), idleWarned = false;
+function watchIdle() {
+  const bump = () => { lastActive = Date.now(); idleWarned = false; };
+  ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach(ev => addEventListener(ev, bump, {passive: true}));
+  setInterval(() => {
+    const idle = Date.now() - lastActive;
+    if (idle > IDLE_MS) signOut(ROLE_LOGIN[ROLE] + '?out=idle');
+    else if (idle > WARN_MS && !idleWarned) { idleWarned = true; toast('You will be signed out in 2 minutes due to inactivity.', 'info'); }
+  }, 15000);
 }
 
 function buildShell() {
@@ -57,7 +74,9 @@ let routeSeq = 0;
 async function route() {
   const P = PORTALS[ROLE];
   const [page, ...args] = (location.hash.replace(/^#\/?/, '') || P.home).split('/');
-  const def = page === 'settings' ? {title: 'Settings', render: renderSettings} : P.pages[page];
+  const def = page === 'settings' ? {title: 'Settings', render: renderSettings}
+    : page === 'messages' && ROLE !== 'admin' ? {title: 'Messages', crumb: 'Clinician–specialist conversations', render: renderMessages}
+    : P.pages[page];
   if (!def) { location.hash = '#/' + P.home; return; }
   const seq = ++routeSeq;
   charts.forEach(c => c.destroy()); charts = [];
@@ -141,6 +160,15 @@ function confidenceMeter(conf, gate) {
     <div class="row small muted" style="margin-top:6px"><span>0%</span><span class="spacer"></span><span>Safety gate ${pct(gate)}</span><span class="spacer"></span><span>100%</span></div>`;
 }
 const confOf = p => p == null ? null : Math.max(p, 1 - p);
+/* Confidence the gate requires for the side the model leans to (two one-sided thresholds). */
+let GATE_INFO = {};
+function gateConf(p) {
+  const g = GATE_INFO, c = g.confidence_threshold;
+  const tp = g.pneumonia_threshold ?? (c != null ? Math.max(c, 1 - c) : null);
+  const tn = g.normal_threshold ?? (tp != null ? 1 - tp : null);
+  if (p == null || tp == null) return null;
+  return p >= 0.5 ? tp : 1 - tn;
+}
 
 /* ---------- notifications ---------- */
 let NOTES = [];
@@ -152,6 +180,7 @@ async function loadNotifications() {
     dot.textContent = d.unread > 9 ? '9+' : d.unread;
     dot.classList.toggle('hidden', !d.unread);
     if (!$('notifPop').classList.contains('hidden')) renderNotifications();
+    setCount('messages', d.unread_messages || 0);
     if (PORTALS[ROLE].onNotify) PORTALS[ROLE].onNotify(d);
   } catch (_) { /* offline: keep last state */ }
 }
@@ -162,7 +191,7 @@ function renderNotifications() {
       <div class="notif ${n.read ? '' : 'unread'}" onclick="openNotification('${esc(n.link)}')">
         <div class="avatar" style="width:30px;height:30px">${icon('bell', 15)}</div>
         <div><div class="t1">${esc(n.title)}</div><div class="t2">${esc(n.body)}</div><div class="t3">${ago(n.created_at)}</div></div></div>`).join('')
-      : emptyState('bell', "You're all caught up", 'New referrals and review results appear here.')}</div>`;
+      : emptyState('bell', "You're all caught up", 'New referrals, messages and review results appear here.')}</div>`;
 }
 function toggleNotifications() {
   const pop = $('notifPop');
@@ -263,3 +292,155 @@ function downloadCSV(name, header, rows) {
 const searchBox = (id, placeholder, handler) => `<div class="input-wrap" style="min-width:240px;flex:1;max-width:360px">
   <input class="input" id="${id}" placeholder="${placeholder}" oninput="${handler}" style="padding-left:36px">
   <span style="position:absolute;left:11px;top:11px;color:var(--muted)">${icon('search', 17)}</span></div>`;
+
+
+/* ---------- clinical context (WHO IMCI-style flags) ---------- */
+const DANGER_SIGNS = {chest_indrawing: 'Chest indrawing', unable_to_feed: 'Unable to drink / feed', lethargy: 'Lethargic or unconscious',
+  convulsions: 'Convulsions', stridor: 'Stridor when calm', cyanosis: 'Central cyanosis', grunting: 'Grunting', vomiting_everything: 'Vomits everything'};
+function fastBreathingLimit(age) {
+  if (age == null || age === '') return null;
+  return age < 1 ? 50 : age < 5 ? 40 : 30;
+}
+function clinicalFlags(c, age) {
+  if (!c) return [];
+  const flags = [];
+  (c.danger_signs || []).forEach(k => flags.push({tone: 'danger', text: DANGER_SIGNS[k] || k}));
+  if (c.spo2 != null && c.spo2 < 90) flags.push({tone: 'danger', text: `Hypoxaemia (SpO₂ ${c.spo2}%)`});
+  else if (c.spo2 != null && c.spo2 < 94) flags.push({tone: 'warn', text: `Low SpO₂ (${c.spo2}%)`});
+  const lim = fastBreathingLimit(age);
+  if (c.respiratory_rate != null && lim && c.respiratory_rate >= lim) flags.push({tone: 'warn', text: `Fast breathing (${c.respiratory_rate}/min, limit ${lim})`});
+  if (c.temperature_c != null && c.temperature_c >= 38) flags.push({tone: 'warn', text: `Fever (${c.temperature_c} °C)`});
+  return flags;
+}
+const isSevere = (c, age) => clinicalFlags(c, age).some(f => f.tone === 'danger');
+function clinicalCard(c, age) {
+  if (!c || (c.respiratory_rate == null && c.spo2 == null && c.temperature_c == null && !(c.danger_signs || []).length))
+    return card('Clinical context', '<p class="muted small">No vital signs were recorded with this scan.</p>');
+  const flags = clinicalFlags(c, age);
+  return card('Clinical context', `<div class="kv"><div><div class="k">Resp. rate</div><div class="v">${c.respiratory_rate ?? '—'}<span class="small muted">${c.respiratory_rate != null ? ' /min' : ''}</span></div></div>
+      <div><div class="k">SpO₂</div><div class="v">${c.spo2 != null ? c.spo2 + '%' : '—'}</div></div>
+      <div><div class="k">Temperature</div><div class="v">${c.temperature_c != null ? c.temperature_c + ' °C' : '—'}</div></div></div>
+    ${flags.length ? `<div class="flag-list" style="margin-top:12px">${flags.map(f => `<span class="badge b-${f.tone}">${esc(f.text)}</span>`).join('')}</div>` : '<p class="small muted" style="margin-top:10px">No WHO danger signs recorded.</p>'}
+    ${isSevere(c, age) ? `<div class="form-error" style="margin-top:12px">Severe-illness criteria present: manage as severe pneumonia and refer urgently regardless of the X-ray result.</div>` : ''}`,
+    {sub: 'Recorded at the time of the scan'});
+}
+
+/* ---------- clinician–specialist chat ---------- */
+const CHATS = {};
+const QUICK = {
+  clinician: ['Any update on this case?', 'The child\'s condition has worsened.', 'Additional history: ', 'Thank you, doctor.'],
+  specialist: ['Reviewing now.', 'Please send RR, SpO₂ and temperature.', 'Please repeat the X-ray with better positioning.', 'Start treatment per guideline while I review.'],
+};
+function chatBox(escId, {tall = false, closed = false} = {}) {
+  setTimeout(() => chatMount(escId), 0);
+  return `<div class="chat ${tall ? 'tall' : ''}" id="chat-${esc(escId)}">
+    <div class="chat-log"><div class="loading"><span class="spin"></span></div></div>
+    ${closed ? '' : `<div class="chips">${(QUICK[ROLE] || []).map(q => `<button type="button" class="chip" onclick="chatQuick('${esc(escId)}', this.textContent)">${esc(q)}</button>`).join('')}</div>`}
+    <form class="chat-input" onsubmit="chatSend(event, '${esc(escId)}')">
+      <textarea class="input" rows="1" maxlength="2000" placeholder="Write a message… (Enter to send, Shift+Enter for a new line)"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();this.form.requestSubmit();}"
+        oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,140)+'px'"></textarea>
+      <button class="btn" aria-label="Send">${icon('send', 16)}</button></form></div>`;
+}
+function chatQuick(escId, text) {
+  const ta = document.querySelector(`#chat-${escId} textarea`);
+  ta.value = text; ta.focus(); ta.setSelectionRange(text.length, text.length);
+}
+async function chatMount(escId) {
+  const old = CHATS[escId];
+  if (old) clearInterval(old.timer);
+  const st = CHATS[escId] = {messages: [], last: null, otherRead: null, timer: null};
+  await chatPoll(escId, true);
+  st.timer = setInterval(() => {
+    if (!document.getElementById('chat-' + escId)) { clearInterval(st.timer); delete CHATS[escId]; return; }
+    if (!document.hidden) chatPoll(escId);
+  }, 4000);
+}
+async function chatPoll(escId, first = false) {
+  const st = CHATS[escId];
+  if (!st || st.busy) return;
+  st.busy = true;
+  try {
+    const d = await apiJSON(`/api/escalations/${encodeURIComponent(escId)}/messages` + (st.last ? `?after=${encodeURIComponent(st.last)}` : ''));
+    const fresh = d.messages.filter(m => !st.messages.some(x => x.message_id === m.message_id));
+    st.messages.push(...fresh);
+    if (st.messages.length) st.last = st.messages[st.messages.length - 1].created_at;
+    const readChanged = d.other_read_at !== st.otherRead;
+    st.otherRead = d.other_read_at;
+    if (first || fresh.length || readChanged) chatRender(escId, first || fresh.some(m => m.sender_id === ME.user_id));
+    if (fresh.length && !first) loadNotifications();
+  } catch (e) {
+    const log = document.querySelector(`#chat-${escId} .chat-log`);
+    if (log && first) log.innerHTML = emptyState('alert', 'Conversation unavailable', esc(e.message));
+  } finally { st.busy = false; }
+}
+function chatRender(escId, forceBottom) {
+  const log = document.querySelector(`#chat-${escId} .chat-log`);
+  const st = CHATS[escId];
+  if (!log || !st) return;
+  const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+  if (!st.messages.length) {
+    log.innerHTML = emptyState('chat', 'No messages yet', ROLE === 'clinician' ? 'Ask the specialist a question or add clinical details.' : 'Ask the referring clinician for more information.');
+    return;
+  }
+  let day = '', html = '';
+  const myLast = [...st.messages].reverse().find(m => m.sender_id === ME.user_id);
+  st.messages.forEach(m => {
+    const d = new Date(m.created_at).toDateString();
+    if (d !== day) { day = d; html += `<div class="chat-day">${d === new Date().toDateString() ? 'Today' : fmtDate(m.created_at, false)}</div>`; }
+    const me = m.sender_id === ME.user_id;
+    const seen = me && m === myLast && st.otherRead && st.otherRead >= m.created_at;
+    html += `<div class="msg ${me ? 'me' : ''}">${me ? '' : `<div class="who">${esc(m.sender_name || '')} · ${ROLE_NAME[m.sender_role] || ''}</div>`}${esc(m.text)}
+      <div class="meta">${new Date(m.created_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}${me ? (seen ? ' · Seen' : ' · Sent') : ''}</div></div>`;
+  });
+  log.innerHTML = html;
+  if (forceBottom || nearBottom) log.scrollTop = log.scrollHeight;
+}
+async function chatSend(e, escId) {
+  e.preventDefault();
+  const ta = e.target.querySelector('textarea'), btn = e.target.querySelector('button');
+  const text = ta.value.trim();
+  if (!text) return;
+  btn.disabled = true;
+  try {
+    const m = await apiJSON(`/api/escalations/${encodeURIComponent(escId)}/messages`, {method: 'POST', json: {text}});
+    ta.value = ''; ta.style.height = 'auto';
+    const st = CHATS[escId];
+    if (st && !st.messages.some(x => x.message_id === m.message_id)) { st.messages.push(m); st.last = m.created_at; chatRender(escId, true); }
+  } catch (err) { toast(err.message, 'error'); }
+  finally { btn.disabled = false; ta.focus(); }
+}
+
+/* ---------- messages page (clinician + specialist) ---------- */
+let CONVS = [];
+async function renderMessages(escId) {
+  CONVS = (await apiJSON('/api/conversations')).conversations;
+  const cur = CONVS.find(c => c.escalation_id === escId);
+  setTimeout(() => {
+    const t = setInterval(async () => {
+      if (!document.getElementById('convList')) return clearInterval(t);
+      try { CONVS = (await apiJSON('/api/conversations')).conversations; $('convList').innerHTML = convItems(escId); } catch (_) {}
+    }, 10000);
+  });
+  const caseLink = c => ROLE === 'specialist' ? `#/review/${esc(c.escalation_id)}` : `#/case/${esc(c.prediction_id)}`;
+  return `${intro('Messages', ROLE === 'clinician' ? 'Talk to the specialists reviewing your referrals.' : 'Talk to the clinicians who referred cases to you.')}
+  <div class="card"><div class="msgs-layout ${cur ? 'open' : ''}">
+    <div class="conv-list" id="convList">${convItems(escId)}</div>
+    <div class="thread">${cur ? `<div class="card-h row wrap"><a class="btn sm ghost mobile-back" href="#/messages">${icon('back', 15)}</a>
+        <div class="avatar">${initials(cur.other_name)}</div>
+        <div style="flex:1 1 180px;min-width:150px"><h3>${esc(cur.other_name || 'Unassigned')}</h3><div class="sub">${esc(cur.patient_name || 'Unknown patient')} · referral ${esc(cur.escalation_id)}</div></div>
+        ${priorityBadge(cur.priority)}${escBadge(cur.status)}<a class="btn sm secondary" href="${caseLink(cur)}">${icon('eye', 15)}${ROLE === 'specialist' ? 'Open review' : 'Open case'}</a></div>
+        ${chatBox(cur.escalation_id, {tall: true})}`
+      : `<div class="thread-empty" style="height:100%;min-height:420px">${emptyState('chat', CONVS.length ? 'Select a conversation' : 'No conversations yet',
+          CONVS.length ? 'Each referral has its own thread.' : (ROLE === 'clinician' ? 'Refer a case to a specialist to start a conversation.' : 'Conversations appear when cases are referred to you.'))}</div>`}</div>
+  </div></div>`;
+}
+function convItems(active) {
+  if (!CONVS.length) return `<div style="padding:20px" class="small muted">No referrals yet.</div>`;
+  return CONVS.map(c => `<div class="conv ${c.escalation_id === active ? 'on' : ''}" onclick="go('#/messages/${esc(c.escalation_id)}')">
+    <div class="avatar">${initials(c.patient_name)}</div>
+    <div style="flex:1;min-width:0"><div class="row" style="gap:6px"><b style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.patient_name || 'Unknown')}</b><span class="spacer"></span><span class="small muted" style="white-space:nowrap">${c.updated_at ? ago(c.updated_at) : ''}</span></div>
+      <div class="small" style="color:var(--text-2)">${esc(c.other_name || '')}${c.priority === 'urgent' ? ' · <span style="color:var(--danger);font-weight:700">urgent</span>' : ''}</div>
+      <div class="preview">${c.last_message ? (c.last_message.sender_id === ME.user_id ? 'You: ' : '') + esc(c.last_message.text) : 'No messages yet'}</div></div>
+    ${c.unread && c.escalation_id !== active ? `<span class="count">${c.unread}</span>` : ''}</div>`).join('');
+}
