@@ -29,6 +29,9 @@ const ICON_PATHS = {
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  megaphone: '<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/>',
+  columns: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="12" y1="4" x2="12" y2="20"/>',
   check: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
   tick: '<polyline points="20 6 9 17 4 12"/>',
   alert: '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
@@ -215,4 +218,10 @@ const AUTH_ERRORS = {
 const authMessage = err => AUTH_ERRORS[err.code] || err.message;
 
 async function loadProfile() { return apiJSON('/api/auth/me'); }
-async function signOut(to = '/') { try { await fbAuth.signOut(); } catch (_) {} location.href = to; }
+async function signOut(to = '/') {
+  try { await fbReady; await fbAuth.signOut(); } catch (_) {}
+  sessionStorage.clear();
+  location.replace(to);
+}
+/* Pages restored from the back/forward cache re-run their auth checks. */
+window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });

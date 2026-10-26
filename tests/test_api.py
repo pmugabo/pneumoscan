@@ -1,5 +1,6 @@
 """API integration tests. Endpoints that need auth/Firestore run against the Firebase
 emulators (see tests/conftest.py) and are skipped otherwise."""
+import uuid
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,12 @@ class TestPredict:
                           headers=clinician["headers"]).json()["prediction_id"]
         r = client.post("/api/feedback", headers=clinician["headers"],
                         json={"prediction_id": pid, "confirmed_outcome": "pneumonia"})
+        assert r.status_code == 400   # a diagnosis must state its basis
+        r = client.post("/api/feedback", headers=clinician["headers"],
+                        json={"prediction_id": pid, "confirmed_outcome": "pneumonia",
+                              "basis": ["clinical_exam", "laboratory"],
+                              "exam_findings": ["crackles"], "crp_mg_l": 85,
+                              "certainty": "confirmed", "treatment": "Amoxicillin"})
         assert r.status_code == 200
         r = client.post("/api/feedback", headers=clinician["headers"],
                         json={"prediction_id": "missing", "confirmed_outcome": "normal"})
@@ -161,14 +168,15 @@ def test_escalation_workflow(clinician, specialist, admin):
 
 @needs_emulator
 def test_admin_creates_user(admin):
+    email = f"new.spec.{uuid.uuid4().hex[:8]}@test.rw"
     r = client.post("/api/admin/users", headers=admin["headers"],
-                    json={"email": "new.spec@test.rw", "password": "password123",
+                    json={"email": email, "password": "password123",
                           "full_name": "Dr New", "role": "specialist"})
     assert r.status_code == 200
     users = client.get("/api/admin/users", headers=admin["headers"]).json()["users"]
-    assert any(u["email"] == "new.spec@test.rw" and u["role"] == "specialist" for u in users)
+    assert any(u["email"] == email and u["role"] == "specialist" for u in users)
     r = client.post("/api/admin/users", headers=admin["headers"],
-                    json={"email": "new.spec@test.rw", "password": "password123",
+                    json={"email": email, "password": "password123",
                           "full_name": "Dr New", "role": "specialist"})
     assert r.status_code == 400
 
@@ -250,3 +258,89 @@ def test_model_card_and_pages():
     for path in ("/login", "/specialist/login", "/admin/login",
                  "/clinician", "/specialist", "/admin"):
         assert client.get(path).status_code == 200, path
+
+
+@needs_emulator
+def test_chat_between_clinician_and_specialist(clinician, specialist, admin):
+    pid = client.post("/api/predict", files=sample_upload(), headers=clinician["headers"],
+                      data={"respiratory_rate": "52", "spo2": "88",
+                            "danger_signs": "chest_indrawing,bogus"}).json()
+    assert pid["clinical"] == {"respiratory_rate": 52, "spo2": 88, "temperature_c": None,
+                               "danger_signs": ["chest_indrawing"]}
+    esc = client.post("/api/escalations", headers=clinician["headers"],
+                      json={"prediction_id": pid["prediction_id"],
+                            "specialist_id": specialist["uid"]}).json()
+    eid = esc["escalation_id"]
+    url = f"/api/escalations/{eid}/messages"
+    assert client.post(url, headers=admin["headers"], json={"text": "hi"}).status_code == 403
+    assert client.post(url, headers=clinician["headers"], json={"text": "  "}).status_code == 400
+    assert client.post(url, headers=clinician["headers"],
+                       json={"text": "x" * 2001}).status_code == 400
+    m1 = client.post(url, headers=clinician["headers"], json={"text": "SpO2 dropping"}).json()
+    client.post(url, headers=clinician["headers"], json={"text": "Please advise"})
+
+    convs = client.get("/api/conversations", headers=specialist["headers"]).json()
+    assert convs["unread"] == 2
+    assert convs["conversations"][0]["last_message"]["text"] == "Please advise"
+    notes = client.get("/api/notifications", headers=specialist["headers"]).json()
+    assert notes["unread_messages"] == 2
+    msg_notes = [n for n in notes["notifications"] if n["link"] == f"messages/{eid}"]
+    assert len(msg_notes) == 1
+    queue = client.get("/api/escalations?images=false", headers=specialist["headers"]).json()
+    assert queue["escalations"][0]["clinical"]["spo2"] == 88
+
+    thread = client.get(url, headers=specialist["headers"]).json()
+    assert [m["text"] for m in thread["messages"]] == ["SpO2 dropping", "Please advise"]
+    assert client.get("/api/conversations", headers=specialist["headers"]).json()["unread"] == 0
+    client.post(url, headers=specialist["headers"], json={"text": "Start antibiotics"})
+    newer = client.get(url, params={"after": m1["created_at"]},
+                       headers=clinician["headers"]).json()
+    assert [m["text"] for m in newer["messages"]] == ["Please advise", "Start antibiotics"]
+    assert newer["other_read_at"] is not None
+    assert client.get("/api/conversations", headers=admin["headers"]).status_code == 403
+
+
+@needs_emulator
+def test_admin_announcement(admin, clinician, specialist):
+    assert client.post("/api/admin/announce", headers=clinician["headers"],
+                       json={"title": "t", "body": "b"}).status_code == 403
+    assert client.post("/api/admin/announce", headers=admin["headers"],
+                       json={"title": "t", "body": "b", "audience": "nobody"}).status_code == 400
+    r = client.post("/api/admin/announce", headers=admin["headers"],
+                    json={"title": "Maintenance", "body": "Tonight", "audience": "specialist"})
+    assert r.status_code == 200 and r.json()["sent"] >= 1
+    titles = [n["title"] for n in client.get("/api/notifications",
+                                             headers=specialist["headers"]).json()["notifications"]]
+    assert "Announcement: Maintenance" in titles
+    titles = [n["title"] for n in client.get("/api/notifications",
+                                             headers=clinician["headers"]).json()["notifications"]]
+    assert "Announcement: Maintenance" not in titles
+
+
+@needs_emulator
+def test_informed_outcome_rules(clinician, specialist):
+    pid = client.post("/api/predict", files=sample_upload(),
+                      headers=clinician["headers"]).json()["prediction_id"]
+    esc = client.post("/api/escalations", headers=clinician["headers"],
+                      json={"prediction_id": pid, "specialist_id": specialist["uid"]}).json()
+    client.post(f"/api/escalations/{esc['escalation_id']}/resolve", headers=specialist["headers"],
+                json={"specialist_comment": "RLL consolidation", "confirmed_outcome": "pneumonia"})
+    post = lambda body: client.post("/api/feedback", headers=clinician["headers"],
+                                    json={"prediction_id": pid, **body})
+    assert post({"confirmed_outcome": "unknown", "follow_up_date": "2026-11-01"}).status_code == 200
+    assert post({"confirmed_outcome": "normal", "basis": ["clinical_exam"],
+                 "certainty": "probable"}).status_code == 400          # no exam findings
+    assert post({"confirmed_outcome": "normal", "basis": ["laboratory"],
+                 "certainty": "probable"}).status_code == 400          # no lab values
+    assert post({"confirmed_outcome": "normal", "basis": ["specialist_review"]}).status_code == 400
+    r = post({"confirmed_outcome": "normal", "basis": ["clinical_exam"],
+              "exam_findings": ["clear_chest"], "certainty": "probable"})
+    assert r.status_code == 400 and "specialist" in r.json()["detail"]   # disagreement needs a reason
+    r = post({"confirmed_outcome": "normal", "basis": ["clinical_exam", "bogus"],
+              "exam_findings": ["clear_chest"], "certainty": "probable",
+              "comment": "Chest clear on two exams, afebrile at 48 h"})
+    rec = r.json()["outcome_record"]
+    assert rec["basis"] == ["clinical_exam"] and rec["agrees_with_specialist"] is False
+    assert rec["specialist_outcome"] == "pneumonia"
+    case = client.get(f"/api/cases/{pid}", headers=clinician["headers"]).json()["case"]
+    assert case["confirmed_outcome"] == "normal" and case["outcome_record"]["certainty"] == "probable"
