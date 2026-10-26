@@ -29,15 +29,17 @@ import json
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from firebase_admin import auth as fb_auth
+from google.cloud import firestore
 from google.cloud.firestore_v1 import FieldFilter, Query
 from PIL import Image
 from pydantic import BaseModel
@@ -54,6 +56,13 @@ STORED_IMAGE_MAX_PX = 768
 ROLES = ("clinician", "specialist", "admin")
 STATES = ("CLEARED", "FLAGGED_URGENT", "ESCALATED", "REJECTED")
 PRIORITIES = ("routine", "urgent")
+DANGER_SIGNS = ("chest_indrawing", "unable_to_feed", "lethargy", "convulsions",
+                "stridor", "cyanosis", "grunting", "vomiting_everything")
+MAX_MESSAGE_CHARS = 2000
+OUTCOME_BASIS = ("specialist_review", "clinical_exam", "laboratory", "treatment_response",
+                 "repeat_imaging", "clinical_course")
+EXAM_FINDINGS = ("crackles", "bronchial_breathing", "reduced_breath_sounds", "dullness",
+                 "wheeze", "clear_chest", "fast_breathing", "chest_indrawing")
 
 app = FastAPI(
     title="PneumoScan API",
@@ -79,14 +88,27 @@ def doc_dict(snap, id_field: str) -> dict:
     return {id_field: snap.id, **(snap.to_dict() or {})}
 
 
-def get_many(collection: str, ids, id_field: str) -> dict:
-    """Fetch documents by id in one round trip; returns {id: dict}."""
+def get_many(collection: str, ids, id_field: str, fields: Optional[list] = None) -> dict:
+    """Fetch documents by id in one round trip; returns {id: dict}. `fields` limits the
+    download to those fields (prediction documents carry large images)."""
     ids = [i for i in set(ids) if i]
     if not ids:
         return {}
     c = col(collection)
-    snaps = firebase.db().get_all([c.document(i) for i in ids])
+    snaps = firebase.db().get_all([c.document(i) for i in ids], field_paths=fields)
     return {s.id: doc_dict(s, id_field) for s in snaps if s.exists}
+
+
+def parallel(*calls):
+    """Run independent Firestore round trips concurrently; each call is (fn, *args)."""
+    with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+        futures = [pool.submit(fn, *args) for fn, *args in calls]
+        return [f.result() for f in futures]
+
+
+PRED_LIST_FIELDS = ["patient_id", "filename", "created_at", "calibrated_prob", "ood_score",
+                    "triage_state", "model_version", "confirmed_outcome", "comment",
+                    "user_id", "clinical", "outcome_record"]
 
 
 def log(prediction_id: Optional[str], action: str, user_id: Optional[str] = None):
@@ -180,6 +202,13 @@ class Feedback(BaseModel):
     prediction_id: str
     confirmed_outcome: str   # "pneumonia" | "normal" | "unknown"
     comment: str = ""
+    basis: list[str] = []            # OUTCOME_BASIS keys the decision rests on
+    exam_findings: list[str] = []    # EXAM_FINDINGS keys
+    crp_mg_l: Optional[float] = None
+    wbc_10e9_l: Optional[float] = None
+    certainty: Optional[str] = None  # "confirmed" | "probable"
+    treatment: Optional[str] = None
+    follow_up_date: Optional[str] = None
 
 
 class UserRegister(BaseModel):
@@ -235,6 +264,16 @@ class EscalationCreate(BaseModel):
     specialist_id: str
     note: Optional[str] = ""
     priority: str = "routine"
+
+
+class MessageCreate(BaseModel):
+    text: str
+
+
+class Announcement(BaseModel):
+    title: str
+    body: str
+    audience: str = "all"
 
 
 class EscalationResolve(BaseModel):
@@ -338,9 +377,11 @@ def model_card():
 @app.get("/api/notifications")
 def notifications(user: dict = Depends(current_user)):
     q = col("notifications").where(filter=FieldFilter("user_id", "==", user["user_id"]))
-    rows = sorted((doc_dict(s, "notification_id") for s in q.stream()),
-                  key=lambda r: r.get("created_at") or "", reverse=True)
-    return {"unread": sum(1 for r in rows if not r.get("read")), "notifications": rows[:30]}
+    notes, convs = parallel((lambda: [doc_dict(s, "notification_id") for s in q.stream()],),
+                            (_conversations, user))
+    rows = sorted(notes, key=lambda r: r.get("created_at") or "", reverse=True)
+    return {"unread": sum(1 for r in rows if not r.get("read")), "notifications": rows[:30],
+            "unread_messages": sum(c["unread"] for c in convs)}
 
 
 @app.post("/api/notifications/read")
@@ -360,6 +401,8 @@ def mark_notifications_read(user: dict = Depends(current_user)):
 # ------------------------------------------------------------------ predictions
 @app.post("/api/predict")
 async def predict(file: UploadFile = File(...), patient_id: Optional[str] = None,
+                  respiratory_rate: Optional[int] = Form(None), spo2: Optional[int] = Form(None),
+                  temperature_c: Optional[float] = Form(None), danger_signs: str = Form(""),
                   user: dict = Depends(require("clinician", "admin"))):
     if file.content_type not in ALLOWED:
         raise HTTPException(400, "Upload a JPEG or PNG image.")
@@ -372,6 +415,9 @@ async def predict(file: UploadFile = File(...), patient_id: Optional[str] = None
     except Exception:
         raise HTTPException(400, "That file could not be read as an image.")
 
+    signs = [x for x in (d.strip() for d in danger_signs.split(",")) if x in DANGER_SIGNS]
+    clinical = {"respiratory_rate": respiratory_rate, "spo2": spo2,
+                "temperature_c": temperature_c, "danger_signs": signs}
     result = engine.predict(img)
     pid = str(uuid.uuid4())
     col("predictions").document(pid).set({
@@ -380,19 +426,58 @@ async def predict(file: UploadFile = File(...), patient_id: Optional[str] = None
         "triage_state": result.state, "model_version": result.model_version,
         "confirmed_outcome": None, "comment": None,
         "heatmap_png": result.heatmap_png, "image_png": to_stored_image(img),
-        "user_id": user["user_id"]})
+        "user_id": user["user_id"], "clinical": clinical})
     log(pid, f"triage:{result.state}", user["user_id"])
-    return {"prediction_id": pid, "patient_id": patient_id, **result.to_dict()}
+    return {"prediction_id": pid, "patient_id": patient_id, "clinical": clinical,
+            **result.to_dict()}
 
 
 @app.post("/api/feedback")
 def feedback(fb: Feedback, user: dict = Depends(current_user)):
+    """A final diagnosis must say what it rests on; disagreeing with the specialist needs a reason."""
     ref = col("predictions").document(fb.prediction_id)
-    if not ref.get().exists:
+    snap, escs = parallel((ref.get,), (lambda: [doc_dict(s, "escalation_id") for s in
+                          col("escalations").where(filter=FieldFilter(
+                              "prediction_id", "==", fb.prediction_id)).stream()],))
+    if not snap.exists:
         raise HTTPException(404, "Unknown prediction_id.")
-    ref.update({"confirmed_outcome": fb.confirmed_outcome, "comment": fb.comment})
+    if fb.confirmed_outcome not in ("pneumonia", "normal", "unknown"):
+        raise HTTPException(400, "Outcome must be pneumonia, normal or unknown")
+    basis = [b for b in fb.basis if b in OUTCOME_BASIS]
+    findings = [f for f in fb.exam_findings if f in EXAM_FINDINGS]
+    comment = (fb.comment or "").strip()
+    reviewed = next((e for e in sorted(escs, key=lambda e: e.get("resolved_at") or "",
+                                       reverse=True)
+                     if e.get("status") == "resolved"), None)
+    spec_dx = reviewed.get("confirmed_outcome") if reviewed else None
+    if fb.confirmed_outcome != "unknown":
+        if not basis:
+            raise HTTPException(400, "Select what this diagnosis is based on.")
+        if "clinical_exam" in basis and not findings:
+            raise HTTPException(400, "Record the examination findings.")
+        if "laboratory" in basis and fb.crp_mg_l is None and fb.wbc_10e9_l is None:
+            raise HTTPException(400, "Enter at least one laboratory result.")
+        if fb.certainty not in ("confirmed", "probable"):
+            raise HTTPException(400, "State whether the diagnosis is confirmed or probable.")
+        if spec_dx in ("pneumonia", "normal") and spec_dx != fb.confirmed_outcome and not comment:
+            raise HTTPException(400, "Your diagnosis differs from the specialist's; "
+                                     "explain why in the rationale.")
+    record = {"outcome": fb.confirmed_outcome, "basis": basis, "exam_findings": findings,
+              "crp_mg_l": fb.crp_mg_l, "wbc_10e9_l": fb.wbc_10e9_l,
+              "certainty": fb.certainty if fb.confirmed_outcome != "unknown" else None,
+              "treatment": (fb.treatment or "").strip() or None,
+              "follow_up_date": fb.follow_up_date, "rationale": comment or None,
+              "specialist_outcome": spec_dx,
+              "agrees_with_specialist": (spec_dx == fb.confirmed_outcome)
+              if spec_dx in ("pneumonia", "normal") and fb.confirmed_outcome != "unknown"
+              else None,
+              "ai_label": ai_label(snap.to_dict() or {}),
+              "recorded_by": user["user_id"], "recorded_by_name": user["full_name"],
+              "recorded_at": now()}
+    ref.update({"confirmed_outcome": fb.confirmed_outcome, "comment": comment,
+                "outcome_record": record})
     log(fb.prediction_id, f"feedback:{fb.confirmed_outcome}", user["user_id"])
-    return {"recorded": True}
+    return {"recorded": True, "outcome_record": record}
 
 
 def _escalations_for(field: str, uid: str) -> list:
@@ -406,19 +491,20 @@ def cases(limit: int = 25, mine: bool = False, user: dict = Depends(current_user
     own with mine=true."""
     if mine and user["role"] != "specialist":
         q = col("predictions").where(filter=FieldFilter("user_id", "==", user["user_id"]))
-        rows = [doc_dict(s, "prediction_id") for s in q.stream()]
+        rows = [doc_dict(s, "prediction_id") for s in q.select(PRED_LIST_FIELDS).stream()]
         rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
         rows = rows[:limit]
     elif user["role"] == "specialist":
         ids = [e["prediction_id"] for e in _escalations_for("assigned_to", user["user_id"])]
-        rows = list(get_many("predictions", ids, "prediction_id").values())
+        rows = list(get_many("predictions", ids, "prediction_id", PRED_LIST_FIELDS).values())
         rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
         rows = rows[:limit]
     else:
         q = col("predictions").order_by("created_at", direction=Query.DESCENDING).limit(limit)
-        rows = [doc_dict(s, "prediction_id") for s in q.stream()]
-    patients = get_many("patients", [r.get("patient_id") for r in rows], "patient_id")
-    users = get_many("users", [r.get("user_id") for r in rows], "user_id")
+        rows = [doc_dict(s, "prediction_id") for s in q.select(PRED_LIST_FIELDS).stream()]
+    patients, users = parallel(
+        (get_many, "patients", [r.get("patient_id") for r in rows], "patient_id"),
+        (get_many, "users", [r.get("user_id") for r in rows], "user_id"))
     for r in rows:
         r.pop("image_png", None)
         r.pop("heatmap_png", None)
@@ -444,18 +530,17 @@ def _visible_escalations(prediction_id: str, user: dict) -> list:
 
 @app.get("/api/cases/{prediction_id}")
 def case_detail(prediction_id: str, user: dict = Depends(current_user)):
-    snap = col("predictions").document(prediction_id).get()
+    snap, escs = parallel((col("predictions").document(prediction_id).get,),
+                          (_visible_escalations, prediction_id, user))
     if not snap.exists:
         raise HTTPException(404, "Prediction not found")
-    escs = _visible_escalations(prediction_id, user)
     case = doc_dict(snap, "prediction_id")
     case["ai_label"] = ai_label(case)
-    patient = None
-    if case.get("patient_id"):
-        p = col("patients").document(case["patient_id"]).get()
-        patient = doc_dict(p, "patient_id") if p.exists else None
-    users = get_many("users", [case.get("user_id")] + [e.get("assigned_to") for e in escs],
-                     "user_id")
+    pts, users = parallel(
+        (get_many, "patients", [case.get("patient_id")], "patient_id"),
+        (get_many, "users", [case.get("user_id")] + [e.get("assigned_to") for e in escs],
+         "user_id"))
+    patient = pts.get(case.get("patient_id"))
     case["clinician_name"] = users.get(case.get("user_id"), {}).get("full_name")
     for e in escs:
         e["specialist_name"] = users.get(e.get("assigned_to"), {}).get("full_name")
@@ -532,10 +617,11 @@ def get_patient(patient_id: str, user: dict = Depends(current_user)):
     snap = col("patients").document(patient_id).get()
     if not snap.exists:
         raise HTTPException(404, "Patient not found")
-    preds = [doc_dict(s, "prediction_id") for s in
-             col("predictions").where(filter=FieldFilter("patient_id", "==", patient_id)).stream()]
-    escs = [doc_dict(s, "escalation_id") for s in
-            col("escalations").where(filter=FieldFilter("patient_id", "==", patient_id)).stream()]
+    preds, escs = parallel(
+        (lambda: [doc_dict(s, "prediction_id") for s in col("predictions").where(
+            filter=FieldFilter("patient_id", "==", patient_id)).stream()],),
+        (lambda: [doc_dict(s, "escalation_id") for s in col("escalations").where(
+            filter=FieldFilter("patient_id", "==", patient_id)).stream()],))
     if user["role"] == "specialist":
         escs = [e for e in escs if e.get("assigned_to") == user["user_id"]]
         if not escs:
@@ -583,7 +669,7 @@ def create_escalation(esc: EscalationCreate, user: dict = Depends(require("clini
         "resolved_at": None, "created_by": user["user_id"]})
     log(esc.prediction_id, f"escalated_to:{sd['full_name']}", user["user_id"])
     notify(esc.specialist_id, ("Urgent referral" if esc.priority == "urgent" else "New referral"),
-           f"{user['full_name']} sent you a case to review.", "queue")
+           f"{user['full_name']} sent you a case to review.", f"review/{escalation_id}")
     return {"escalation_id": escalation_id, "status": "sent", "priority": esc.priority,
             "assigned_to": esc.specialist_id, "specialist_name": sd["full_name"]}
 
@@ -621,14 +707,17 @@ def list_escalations(status: Optional[str] = None, images: bool = True,
         rows = [doc_dict(s, "escalation_id") for s in col("escalations").stream()]
     if status:
         rows = [r for r in rows if r.get("status") == status]
-    preds = get_many("predictions", [r["prediction_id"] for r in rows], "prediction_id")
-    patients = get_many("patients", [r.get("patient_id") for r in rows], "patient_id")
-    users = get_many("users", [r.get("created_by") for r in rows] +
-                     [r.get("assigned_to") for r in rows], "user_id")
+    preds, patients, users = parallel(
+        (get_many, "predictions", [r["prediction_id"] for r in rows], "prediction_id",
+         None if images else PRED_LIST_FIELDS),
+        (get_many, "patients", [r.get("patient_id") for r in rows], "patient_id"),
+        (get_many, "users", [r.get("created_by") for r in rows] +
+         [r.get("assigned_to") for r in rows], "user_id"))
     for r in rows:
         p = preds.get(r["prediction_id"], {})
-        for k in ("filename", "calibrated_prob", "ood_score", "triage_state",
-                  "confirmed_outcome") + (("heatmap_png", "image_png") if images else ()):
+        r["unread"] = (r.get("unread") or {}).get(user["user_id"], 0)
+        r["final_outcome"] = p.get("confirmed_outcome")
+        for k in ("filename", "calibrated_prob", "ood_score", "triage_state", "clinical") + (("heatmap_png", "image_png") if images else ()):
             r[k] = p.get(k)
         r["ai_label"] = ai_label(p)
         r.setdefault("priority", "routine")
@@ -660,8 +749,102 @@ def resolve_escalation(escalation_id: str, resolution: EscalationResolve,
     log(esc["prediction_id"], f"specialist_review:{outcome or 'reviewed'}", user["user_id"])
     notify(esc.get("created_by"), "Specialist review completed",
            f"{user['full_name']} reviewed your referral"
-           + (f": {outcome}." if outcome else "."), "referrals")
+           + (f": {outcome}." if outcome else "."), f"case/{esc['prediction_id']}")
     return {"resolved": True, "ai_agrees": agrees}
+
+
+
+# ------------------------------------------------------------------ chat
+def _chat_escalation(escalation_id: str, user: dict):
+    """Only the referring clinician and the assigned specialist can use a referral's thread."""
+    ref = col("escalations").document(escalation_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(404, "Referral not found")
+    esc = snap.to_dict()
+    if user["user_id"] not in (esc.get("created_by"), esc.get("assigned_to")):
+        raise HTTPException(403, "Only the referring clinician and the assigned specialist "
+                                 "can use this conversation.")
+    return ref, esc
+
+
+def _conversations(user: dict) -> list:
+    if user["role"] == "specialist":
+        rows = _escalations_for("assigned_to", user["user_id"])
+    elif user["role"] == "clinician":
+        rows = _escalations_for("created_by", user["user_id"])
+    else:
+        return []
+    for r in rows:
+        r["unread"] = (r.get("unread") or {}).get(user["user_id"], 0)
+    return rows
+
+
+@app.get("/api/conversations")
+def conversations(user: dict = Depends(require("clinician", "specialist"))):
+    rows = _conversations(user)
+    other_field = "created_by" if user["role"] == "specialist" else "assigned_to"
+    patients, preds, users = parallel(
+        (get_many, "patients", [r.get("patient_id") for r in rows], "patient_id"),
+        (get_many, "predictions", [r.get("prediction_id") for r in rows], "prediction_id",
+         ["triage_state"]),
+        (get_many, "users", [r.get(other_field) for r in rows], "user_id"))
+    out = []
+    for r in rows:
+        pt = patients.get(r.get("patient_id"), {})
+        other = users.get(r.get(other_field), {})
+        out.append({"escalation_id": r["escalation_id"], "prediction_id": r.get("prediction_id"),
+                    "patient_name": pt.get("full_name"), "status": r.get("status"),
+                    "priority": r.get("priority", "routine"),
+                    "triage_state": preds.get(r.get("prediction_id"), {}).get("triage_state"),
+                    "other_name": other.get("full_name"), "other_role": other.get("role"),
+                    "last_message": r.get("last_message"), "unread": r["unread"],
+                    "updated_at": (r.get("last_message") or {}).get("at") or r.get("created_at")})
+    out.sort(key=lambda c: c["updated_at"] or "", reverse=True)
+    return {"conversations": out, "unread": sum(c["unread"] for c in out)}
+
+
+@app.get("/api/escalations/{escalation_id}/messages")
+def get_messages(escalation_id: str, after: Optional[str] = None,
+                 user: dict = Depends(require("clinician", "specialist"))):
+    ref, esc = _chat_escalation(escalation_id, user)
+    q = col("messages").where(filter=FieldFilter("escalation_id", "==", escalation_id))
+    rows = sorted((doc_dict(s, "message_id") for s in q.stream()),
+                  key=lambda m: m.get("created_at") or "")
+    if after:
+        rows = [m for m in rows if (m.get("created_at") or "") > after]
+    if (esc.get("unread") or {}).get(user["user_id"]):
+        ref.update({f"unread.{user['user_id']}": 0})
+    other = esc.get("assigned_to") if user["user_id"] == esc.get("created_by") else esc.get("created_by")
+    other_read = (esc.get("read_at") or {}).get(other)
+    ref.update({f"read_at.{user['user_id']}": now()})
+    return {"messages": rows, "status": esc.get("status"), "other_read_at": other_read}
+
+
+@app.post("/api/escalations/{escalation_id}/messages")
+def post_message(escalation_id: str, body: MessageCreate,
+                 user: dict = Depends(require("clinician", "specialist"))):
+    ref, esc = _chat_escalation(escalation_id, user)
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Message cannot be empty")
+    if len(text) > MAX_MESSAGE_CHARS:
+        raise HTTPException(400, f"Messages are limited to {MAX_MESSAGE_CHARS} characters")
+    ts = now()
+    msg = {"escalation_id": escalation_id, "sender_id": user["user_id"],
+           "sender_name": user["full_name"], "sender_role": user["role"],
+           "text": text, "created_at": ts}
+    _, mref = col("messages").add(msg)
+    other = esc.get("assigned_to") if user["user_id"] == esc.get("created_by") else esc.get("created_by")
+    ref.update({"last_message": {"text": text[:140], "sender_id": user["user_id"], "at": ts},
+                f"unread.{other}": firestore.Increment(1),
+                f"read_at.{user['user_id']}": ts})
+    link = f"messages/{escalation_id}"
+    pending = col("notifications").where(filter=FieldFilter("user_id", "==", other)).stream()
+    if not any((n.to_dict() or {}).get("link") == link and not (n.to_dict() or {}).get("read")
+               for n in pending):
+        notify(other, f"New message from {user['full_name']}", text[:120], link)
+    return {"message_id": mref.id, **msg}
 
 
 # ------------------------------------------------------------------ admin
@@ -735,6 +918,26 @@ def update_user(uid: str, data: AdminUserUpdate, user: dict = Depends(require("a
     log(None, f"user_updated:{(snap.to_dict() or {}).get('email')}:" +
         ",".join(f"{k}={v}" for k, v in changes.items()), user["user_id"])
     return {"updated": True, "user_id": uid, **changes}
+
+
+@app.post("/api/admin/announce")
+def announce(body: Announcement, user: dict = Depends(require("admin"))):
+    title, text = body.title.strip(), body.body.strip()
+    if not title or not text:
+        raise HTTPException(400, "Title and message are required")
+    if body.audience not in ("all",) + ROLES:
+        raise HTTPException(400, "Unknown audience")
+    q = col("users")
+    if body.audience != "all":
+        q = q.where(filter=FieldFilter("role", "==", body.audience))
+    n = 0
+    for s in q.stream():
+        d = s.to_dict() or {}
+        if d.get("is_active", True) and s.id != user["user_id"]:
+            notify(s.id, f"Announcement: {title}", text, "")
+            n += 1
+    log(None, f"announcement:{body.audience}:{title[:60]}", user["user_id"])
+    return {"sent": n}
 
 
 @app.get("/api/admin/monitoring")
@@ -849,7 +1052,7 @@ PAGES = {"/": "index.html",
 
 def _page(name: str):
     def view():
-        return FileResponse(FRONTEND / name, headers={"Cache-Control": "no-cache"})
+        return FileResponse(FRONTEND / name, headers={"Cache-Control": "no-store"})
     return view
 
 

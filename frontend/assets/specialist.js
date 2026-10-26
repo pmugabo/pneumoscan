@@ -4,7 +4,8 @@ PORTALS.specialist = {
   nav: [{section: 'Reviews'},
     {id: 'overview', label: 'Overview', icon: 'grid'},
     {id: 'queue', label: 'Review queue', icon: 'inbox'},
-    {id: 'completed', label: 'Completed', icon: 'check'}],
+    {id: 'completed', label: 'Completed', icon: 'check'},
+    {id: 'messages', label: 'Messages', icon: 'chat'}],
   pages: {
     overview: {title: 'Overview', render: spOverview},
     queue: {title: 'Review queue', render: spQueue, after: () => spFilterQueue()},
@@ -71,7 +72,7 @@ function spFilterQueue() {
       <div class="avatar">${initials(e.patient_name)}</div>
       <div style="flex:1;min-width:0"><div class="row"><b>${esc(e.patient_name || 'Unknown patient')}</b><span class="small muted">${e.age != null ? esc(e.age) + ' y' : ''} ${esc(e.gender || '')}</span></div>
         <div class="small muted">From ${esc(e.clinician_name || 'clinician')}${e.note ? ' · “' + esc(e.note.slice(0, 80)) + (e.note.length > 80 ? '…' : '') + '”' : ''}</div></div>
-      <div class="row" style="gap:8px">${priorityBadge(e.priority)}${stateBadge(e.triage_state)}${escBadge(e.status)}</div>
+      <div class="row" style="gap:8px">${isSevere(e.clinical, e.age) ? '<span class="badge b-danger">Danger signs</span>' : ''}${e.unread ? `<span class="badge b-accent">${icon('chat', 12)} ${e.unread}</span>` : ''}${priorityBadge(e.priority)}${stateBadge(e.triage_state)}${escBadge(e.status)}</div>
       <div style="width:90px;text-align:right">${waitLabel(e.created_at)}<div class="small muted">waiting</div></div></div>`).join('')
     : emptyState('check', 'Nothing waiting', 'New referrals will appear here and in your notifications.');
 }
@@ -79,13 +80,11 @@ function spFilterQueue() {
 async function spReview(id) {
   let esc0 = (await spLoad()).find(e => e.escalation_id === id);
   if (!esc0) throw new Error('This referral was not found or is not assigned to you.');
-  if (esc0.status === 'sent') {
-    await apiJSON(`/api/escalations/${encodeURIComponent(id)}/start`, {method: 'POST'});
-    esc0.status = 'pending'; setCount('queue', spOpen().length);
-  }
-  const d = await apiJSON(`/api/cases/${encodeURIComponent(esc0.prediction_id)}`);
+  const [, d] = await Promise.all([
+    esc0.status === 'sent' ? apiJSON(`/api/escalations/${encodeURIComponent(id)}/start`, {method: 'POST'}) : null,
+    apiJSON(`/api/cases/${encodeURIComponent(esc0.prediction_id)}`)]);
+  if (esc0.status === 'sent') { esc0.status = 'pending'; setCount('queue', spOpen().length); }
   const c = d.case, p = d.patient || {};
-  const gate = (await apiJSON('/api/model-info').catch(() => ({gate: {}}))).gate.confidence_threshold;
   const done = esc0.status === 'resolved';
   setTimeout(() => { const f = $('rvForm'); if (f) f.onsubmit = ev => spSubmit(ev, id); });
   return `<div class="row" style="margin-bottom:16px"><a class="btn sm ghost" href="#/queue">${icon('back', 15)}Queue</a><span class="spacer"></span>
@@ -97,7 +96,7 @@ async function spReview(id) {
         <div class="kv"><div><div class="k">P(pneumonia)</div><div class="v">${c.calibrated_prob != null ? c.calibrated_prob.toFixed(3) : '—'}</div></div>
           <div><div class="k">Model leaning</div><div class="v">${c.ai_label ? c.ai_label[0].toUpperCase() + c.ai_label.slice(1) : '—'}</div></div>
           <div><div class="k">OOD distance</div><div class="v">${c.ood_score != null ? Number(c.ood_score).toFixed(0) : '—'}</div></div></div>
-        ${c.calibrated_prob != null && gate ? confidenceMeter(confOf(c.calibrated_prob), gate) : ''}
+        ${c.calibrated_prob != null && gateConf(c.calibrated_prob) ? confidenceMeter(confOf(c.calibrated_prob), gateConf(c.calibrated_prob)) : ''}
         <p class="small muted">Record your own reading first; the model's leaning is shown for the agreement audit, not as a diagnosis.</p></div>`)}
     </div>
     <div class="stack">
@@ -106,6 +105,9 @@ async function spReview(id) {
         <div class="stack small"><div><div class="label">Referred by</div>${esc(esc0.clinician_name || '—')}</div>
           <div><div class="label">Clinician note</div>${esc(esc0.note || 'No note provided.')}</div>
           ${p.notes ? `<div><div class="label">Patient notes</div>${esc(p.notes)}</div>` : ''}</div>`)}
+      ${clinicalCard(c.clinical, p.age)}
+      ${card(`Conversation with ${esc(esc0.clinician_name || 'clinician')}`, chatBox(id, {closed: false}),
+          {flush: true, action: `<a class="btn sm ghost" href="#/messages/${esc(id)}">${icon('chat', 15)}Full screen</a>`})}
       ${done ? card('Your decision', `<div class="stack small"><div class="row"><span class="label">Diagnosis</span><span class="spacer"></span>${outcomeBadge(esc0.confirmed_outcome)}</div>
           ${['findings', 'recommendation', 'specialist_comment'].map(k => d.escalations[0]?.[k] ? `<div><div class="label">${{findings: 'Findings', recommendation: 'Recommendation', specialist_comment: 'Comment'}[k]}</div>${esc(d.escalations[0][k])}</div>` : '').join('')}
           <div class="muted">Resolved ${fmtDate(esc0.resolved_at)}</div></div>`)

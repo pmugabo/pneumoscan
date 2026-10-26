@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
 <title>Sign in · PneumoScan</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'><path d='M12 3v8M7.5 6C5 7 3 11 3 16c0 2.5 1.5 4 3.5 4S10 19 10 16v-5.5C10 8 9 6 7.5 6zM16.5 6C19 7 21 11 21 16c0 2.5-1.5 4-3.5 4S14 19 14 16v-5.5C14 8 15 6 16.5 6z'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/assets/style.css?v=2">
+<link rel="stylesheet" href="/static/assets/style.css?v=4">
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="/static/assets/core.js?v=2"></script>
+<script src="/static/assets/core.js?v=4"></script>
 </head>
 <body>
 <div class="auth">
@@ -20,6 +21,7 @@
       <button class="icon-btn" id="themeBtn" title="Toggle light/dark mode" aria-label="Toggle theme"></button>
     </div>
     <div class="box">
+      <a href="/" class="auth-home-mobile" id="homeMobile">Back to home</a>
       <a href="/" class="brand" style="padding:0 0 28px"><span class="logo"></span>PneumoScan</a>
       <div id="portalTag" class="eyebrow"></div>
       <h1 id="title" style="margin-top:14px"></h1>
@@ -33,25 +35,25 @@
       <div id="err" class="form-error hidden" role="alert"></div>
       <div id="note" class="form-note hidden"></div>
 
-      <form id="signin" class="stack" style="margin-top:14px" novalidate>
+      <form id="signin" class="stack" style="margin-top:14px" novalidate autocomplete="off">
         <div class="field"><label for="siEmail">Email</label>
-          <input class="input" id="siEmail" type="email" autocomplete="username" required placeholder="name@hospital.rw"></div>
+          <input class="input" id="siEmail" name="ps-email" type="email" autocomplete="off" readonly data-noautofill required placeholder="name@hospital.rw"></div>
         <div class="field"><div class="row"><label for="siPass">Password</label><span class="spacer"></span>
           <a href="#" id="forgot" class="small">Forgot password?</a></div>
-          <div class="input-wrap"><input class="input" id="siPass" type="password" autocomplete="current-password" required placeholder="••••••••">
+          <div class="input-wrap"><input class="input" id="siPass" name="ps-pass" type="password" autocomplete="off" readonly data-noautofill required placeholder="Enter your password">
             <button type="button" class="reveal" data-for="siPass">Show</button></div></div>
         <button class="btn lg block" id="siBtn" type="submit"></button>
       </form>
 
-      <form id="signup" class="stack hidden" style="margin-top:14px" novalidate>
+      <form id="signup" class="stack hidden" style="margin-top:14px" novalidate autocomplete="off">
         <div class="field"><label for="suName">Full name</label>
           <input class="input" id="suName" required placeholder="Dr. Jane Uwase" autocomplete="name"></div>
         <div class="field"><label for="suHosp">Health facility</label>
           <input class="input" id="suHosp" placeholder="e.g. Kibagabaga District Hospital" autocomplete="organization"></div>
         <div class="field"><label for="suEmail">Work email</label>
-          <input class="input" id="suEmail" type="email" required placeholder="name@hospital.rw" autocomplete="email"></div>
+          <input class="input" id="suEmail" type="email" required placeholder="name@hospital.rw" autocomplete="off" readonly data-noautofill></div>
         <div class="field"><label for="suPass">Password</label>
-          <div class="input-wrap"><input class="input" id="suPass" type="password" minlength="8" required placeholder="At least 8 characters" autocomplete="new-password">
+          <div class="input-wrap"><input class="input" id="suPass" type="password" minlength="8" required placeholder="At least 8 characters" autocomplete="new-password" readonly data-noautofill>
             <button type="button" class="reveal" data-for="suPass">Show</button></div></div>
         <button class="btn lg block" id="suBtn" type="submit">Create clinician account</button>
         <p class="small muted">New accounts are clinician accounts. Specialist and administrator accounts are issued by your administrator.</p>
@@ -84,11 +86,14 @@ const P = PORTALS[role];
 document.documentElement.dataset.role = role;
 document.title = `${P.tag} · PneumoScan`;
 document.querySelector('.brand .logo').innerHTML = icon('logo');
+$('homeMobile').insertAdjacentHTML('afterbegin', icon('back', 15));
 $('portalTag').innerHTML = icon(role === 'specialist' ? 'steth' : role === 'admin' ? 'shield' : 'clipboard', 14) + P.tag;
 $('title').textContent = P.title;
 $('subtitle').textContent = P.subtitle;
 $('siBtn').textContent = role === 'clinician' ? 'Sign in' : `Sign in as ${ROLE_NAME[role].toLowerCase()}`;
-$('art').innerHTML = `<div class="brand" style="color:#fff;padding:0"><span class="logo" style="background:rgba(255,255,255,.18)">${icon('logo')}</span>PneumoScan</div>
+$('art').innerHTML = `<div class="row" style="justify-content:space-between;gap:16px;flex-wrap:wrap">
+    <div class="brand" style="color:#fff;padding:0"><span class="logo" style="background:rgba(255,255,255,.18)">${icon('logo')}</span>PneumoScan</div>
+    <a class="art-home" href="/">${icon('back', 16)}Back to home</a></div>
   <h2>${P.art[0]}</h2><p>${P.art[1]}</p>
   <ul>${P.points.map(p => `<li>${icon('tick')}<span>${p}</span></li>`).join('')}</ul>
   <p class="small" style="opacity:.7;margin-top:0">Research prototype · decision support only · not a certified medical device</p>`;
@@ -176,13 +181,39 @@ $('signup').onsubmit = async e => {
   } catch (err) { working = false; showErr(err.code ? authMessage(err) : err.message); }
 };
 
-$('forgot').onclick = async e => {
+/* Browsers may autofill saved (old) credentials; fields stay read-only until the user focuses them. */
+document.querySelectorAll('[data-noautofill]').forEach(inp => {
+  inp.value = '';
+  const unlock = () => inp.removeAttribute('readonly');
+  inp.addEventListener('focus', unlock); inp.addEventListener('pointerdown', unlock);
+});
+const clearForms = () => document.querySelectorAll('form').forEach(f => f.reset());
+setTimeout(clearForms, 60); window.addEventListener('pageshow', clearForms);
+
+$('forgot').onclick = e => {
   e.preventDefault();
-  const email = $('siEmail').value.trim();
-  if (!email) return showErr('Enter your email above, then click "Forgot password?".');
-  try { await fbReady; await fbAuth.sendPasswordResetEmail(email); showNote(`If ${email} has an account, a reset link is on its way.`); }
-  catch (err) { showErr(authMessage(err)); }
+  const m = openModal({title: 'Reset your password', body: `
+      <p class="muted" style="margin-bottom:14px">Enter the email you sign in with. We will email you a secure link to choose a new password.</p>
+      <div class="field"><label>Email</label><input class="input" id="fpEmail" type="email" autocomplete="off" placeholder="name@hospital.rw" value="${esc($('siEmail').value.trim())}"></div>
+      <div id="fpMsg"></div>`,
+    footer: `<button class="btn secondary" data-close>Cancel</button><button class="btn" id="fpSend">${icon('send', 16)}Send reset link</button>`});
+  setTimeout(() => m.q('#fpEmail').focus(), 50);
+  m.q('#fpSend').onclick = () => withBusy(m.q('#fpSend'), 'Sending…', async () => {
+    const email = m.q('#fpEmail').value.trim();
+    const say = (cls, text) => m.q('#fpMsg').innerHTML = `<div class="${cls}" style="margin-top:12px">${text}</div>`;
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return say('form-error', 'Enter a valid email address.');
+    try {
+      await fbReady;
+      await fbAuth.sendPasswordResetEmail(email, {url: location.origin + location.pathname});
+      say('form-note', `If <b>${esc(email)}</b> has a PneumoScan account, a reset link is on its way. It can take a few minutes; check your spam folder too. The link expires in 1 hour.`);
+      m.q('#fpSend').classList.add('hidden');
+      m.q('.modal-f [data-close]').textContent = 'Done';
+    } catch (err) { say('form-error', esc(authMessage(err))); }
+  });
 };
+const qs = new URLSearchParams(location.search);
+if (qs.get('e')) showErr(qs.get('e'));
+if (qs.get('out') === 'idle') showNote('You were signed out after 30 minutes of inactivity.');
 </script>
 </body>
 </html>

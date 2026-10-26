@@ -15,21 +15,58 @@
     "fn": 21
   },
   "gated_accepted_only": {
-    "n": 457,
-    "threshold": 0.9754999876022339,
+    "n": 506,
+    "threshold": null,
     "sensitivity": 1.0,
-    "specificity": 0.7058823529411765,
+    "specificity": 0.8013245033112583,
     "precision": 0.922077922077922,
     "f1": 0.9594594594594594,
-    "accuracy": 0.9343544857768052,
-    "auc": 0.9462855564761116,
+    "accuracy": 0.9407114624505929,
+    "auc": 0.9637160712620091,
     "tp": 355,
-    "tn": 72,
+    "tn": 121,
     "fp": 30,
-    "fn": 0
+    "fn": 0,
+    "npv": 1.0,
+    "rule": "pneumonia if p >= pneumonia_threshold, normal if p <= normal_threshold"
   },
-  "accepted": 457,
-  "escalated_low_confidence": 147,
+  "accepted": 506,
+  "escalated_low_confidence": 98,
   "rejected_out_of_distribution": 14,
-  "autonomy_rate": 0.7394822006472492
+  "autonomy_rate": 0.8187702265372169,
+  "previous_symmetric_gate": {
+    "accepted": 457,
+    "escalated_low_confidence": 147,
+    "rejected_out_of_distribution": 14,
+    "autonomy_rate": 0.7394822006472492,
+    "gated_accepted_only": {
+      "n": 457,
+      "threshold": 0.9754999876022339,
+      "sensitivity": 1.0,
+      "specificity": 0.7058823529411765,
+      "precision": 0.922077922077922,
+      "f1": 0.9594594594594594,
+      "accuracy": 0.9343544857768052,
+      "auc": 0.9462855564761116,
+      "tp": 355,
+      "tn": 72,
+      "fp": 30,
+      "fn": 0
+    }
+  },
+  "validation_two_sided_gate": {
+    "n": 1017,
+    "accepted": 896,
+    "escalated_low_confidence": 70,
+    "rejected_out_of_distribution": 51,
+    "autonomy_rate": 0.8810226155358899,
+    "sensitivity": 0.989345509893455,
+    "specificity": 1.0,
+    "precision": 1.0,
+    "npv": 0.9715447154471545,
+    "tp": 650,
+    "tn": 239,
+    "fp": 0,
+    "fn": 7
+  }
 }

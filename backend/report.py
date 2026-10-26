@@ -65,6 +65,27 @@ def generate_report(prediction_data: dict) -> BytesIO:
                  "REJECTED": "Not assessed (input rejected)"}.get(prediction_data.get("triage_state"), "N/A")
     story.append(Paragraph(f"<b>Predicted Class:</b> {predicted}", styles["Normal"]))
     story.append(Paragraph(f"<b>Confirmed Outcome:</b> {prediction_data.get('confirmed_outcome') or 'Not yet confirmed'}", styles["Normal"]))
+    rec = prediction_data.get("outcome_record")
+    if rec and rec.get("outcome") != "unknown":
+        names = {"specialist_review": "specialist review", "clinical_exam": "clinical examination",
+                 "laboratory": "laboratory results", "treatment_response": "response to treatment",
+                 "repeat_imaging": "repeat imaging", "clinical_course": "clinical course"}
+        basis = ", ".join(names.get(b, b) for b in rec.get("basis") or []) or "not stated"
+        labs = ", ".join(x for x in (f"CRP {rec['crp_mg_l']} mg/L" if rec.get("crp_mg_l") is not None else "",
+                                     f"WBC {rec['wbc_10e9_l']} x10^9/L" if rec.get("wbc_10e9_l") is not None else "") if x)
+        lines = [f"<b>Diagnosis basis:</b> {basis} ({rec.get('certainty') or 'certainty not stated'})"]
+        if rec.get("exam_findings"):
+            lines.append("<b>Examination:</b> " + ", ".join(f.replace("_", " ") for f in rec["exam_findings"]))
+        if labs:
+            lines.append(f"<b>Laboratory:</b> {labs}")
+        if rec.get("treatment"):
+            lines.append(f"<b>Treatment:</b> {rec['treatment']}")
+        if rec.get("rationale"):
+            lines.append(f"<b>Rationale:</b> {rec['rationale']}")
+        lines.append(f"<b>Recorded by:</b> {rec.get('recorded_by_name') or 'clinician'}, "
+                     f"{(rec.get('recorded_at') or '')[:16].replace('T', ' ')}")
+        for line in lines:
+            story.append(Paragraph(line, styles["Normal"]))
     story.append(Spacer(1, 12))
     
     # Metrics
