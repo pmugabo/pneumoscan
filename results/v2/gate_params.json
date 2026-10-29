@@ -1,0 +1,39 @@
+{
+  "selected_model": "densenet121",
+  "selection_metric": "AUC on the selection set",
+  "selection_auc_by_model": {
+    "small_cnn": 0.9611981787682722,
+    "resnet50": 0.9987922358015816,
+    "densenet121": 0.9990510424155284,
+    "efficientnet_b0": 0.9984279894560268
+  },
+  "temperature": 0.7430559992790222,
+  "decision_threshold": 0.5,
+  "confidence_threshold": 0.9997808342062048,
+  "distance_threshold": 841.6648968992907,
+  "retain_dist": 0.95,
+  "coverage_conf": 0.8,
+  "cross_fitting": {
+    "folds": 5,
+    "grouped_by": "patient",
+    "fold_temperatures": [
+      0.7832281589508057,
+      0.7497388124465942,
+      0.7966957688331604,
+      0.7333354353904724,
+      0.6197024583816528
+    ],
+    "used_for": "confidence threshold (out-of-fold confidences); deployed T is fitted on the whole calibration set"
+  },
+  "tie_rule": "accepted when distance <= tau_d and confidence >= tau_c; pneumonia when p >= decision_threshold",
+  "ece": {
+    "cal_before": 0.004425174606304362,
+    "cal_after": 0.004435633919860679,
+    "test_before": 0.10073880649661929,
+    "test_after": 0.10947176062844831
+  },
+  "fitted_on": "calibration set (patient-disjoint from train, selection and test)",
+  "manifest_sha256": "3118e967eeefe123bbc9594cdf716d32aeea55d58ce3ee88645bc0eab8c2afc0",
+  "seed": 42,
+  "note": "all parameters fitted on the calibration set, then frozen"
+}

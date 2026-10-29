@@ -1,0 +1,17 @@
+{
+  "date_utc": "2026-10-28T21:38:52.098297+00:00",
+  "python": "3.13.15",
+  "torch": "2.11.0+cu128",
+  "numpy": "2.1.3",
+  "pandas": "2.3.3",
+  "seed": 42,
+  "fractions": {
+    "train": 0.7,
+    "sel": 0.15,
+    "cal": 0.15
+  },
+  "decision_threshold": 0.5,
+  "retain_dist": 0.95,
+  "coverage_conf": 0.8,
+  "smoke_test": false
+}

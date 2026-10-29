@@ -1,0 +1,22 @@
+{
+  "small_cnn": {
+    "params_millions": 0.24,
+    "best_selection_loss": 0.13481107354164124,
+    "minutes": 4.4
+  },
+  "resnet50": {
+    "params_millions": 23.51,
+    "best_selection_loss": 0.02405758947134018,
+    "minutes": 8.5
+  },
+  "densenet121": {
+    "params_millions": 6.95,
+    "best_selection_loss": 0.023302491754293442,
+    "minutes": 10.0
+  },
+  "efficientnet_b0": {
+    "params_millions": 4.01,
+    "best_selection_loss": 0.03131929412484169,
+    "minutes": 8.0
+  }
+}

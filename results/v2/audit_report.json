@@ -1,0 +1,65 @@
+{
+  "files_found": 5856,
+  "unreadable_files_excluded": 0,
+  "valid_images_after_decoding": 5856,
+  "duplicates_removed": 32,
+  "duplicate_groups_with_conflicting_labels": 0,
+  "excluded_patient_overlap_with_test": 547,
+  "images_used": 5277,
+  "unique_patients_used": 2789,
+  "unit_of_splitting": "patient",
+  "split_counts": {
+    "normal": {
+      "train": 887,
+      "sel": 195,
+      "cal": 172,
+      "test": 231
+    },
+    "pneumonia": {
+      "train": 2426,
+      "sel": 535,
+      "cal": 444,
+      "test": 387
+    },
+    "images": {
+      "train": 3313,
+      "sel": 730,
+      "cal": 616,
+      "test": 618
+    },
+    "patients": {
+      "train": 1670,
+      "sel": 358,
+      "cal": 358,
+      "test": 403
+    }
+  },
+  "width": {
+    "min": 384,
+    "max": 2916
+  },
+  "height": {
+    "min": 127,
+    "max": 2713
+  },
+  "files_by_folder_and_label": {
+    "test/0": 234,
+    "test/1": 390,
+    "train/0": 1341,
+    "train/1": 3875,
+    "val/0": 8,
+    "val/1": 8
+  },
+  "patient_ids_by_split_and_class": {
+    "cal/0": 137,
+    "cal/1": 221,
+    "sel/0": 137,
+    "sel/1": 221,
+    "test/0": 201,
+    "test/1": 202,
+    "train/0": 640,
+    "train/1": 1030
+  },
+  "patient_identifier_caveat": "pneumonia identifiers (personN) are patient-level; normal identifiers (IM-xxxx) are a weaker proxy and may group images of different patients or split one patient",
+  "manifest_sha256": "3118e967eeefe123bbc9594cdf716d32aeea55d58ce3ee88645bc0eab8c2afc0"
+}

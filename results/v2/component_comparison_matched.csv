@@ -1,0 +1,4 @@
+system,test_coverage,accepted_pneumonia,accepted_normal,missed_pneumonia_accepted,false_alarms_accepted,refused_pneumonia,refused_normal,accepted_sensitivity,accepted_specificity,sensitivity_ci_lo,sensitivity_ci_hi,specificity_ci_lo,specificity_ci_hi
+calibration_only,0.6067961165048543,319,56,0,14,68,175,1.0,0.75,1.0,1.0,0.622375,0.8584586466165413
+ood_only,0.6067961165048543,251,124,1,62,136,107,0.9960159362549801,0.5,0.985946755298144,1.0,0.4047599520534982,0.5875425376762275
+combined,0.6067961165048543,325,50,0,14,62,181,1.0,0.72,1.0,1.0,0.5898135669362085,0.8333333333333334

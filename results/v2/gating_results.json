@@ -1,0 +1,102 @@
+{
+  "selected_model": "densenet121",
+  "n_test": 618,
+  "definitions": {
+    "decision_threshold": 0.5,
+    "confidence_threshold": 0.9997808342062048,
+    "distance_threshold": 841.6648968992907,
+    "temperature": 0.7430559992790222,
+    "retain_dist": 0.95,
+    "coverage_conf": 0.8,
+    "fitted_on": "calibration set only"
+  },
+  "final_states": {
+    "CLEARED": 36,
+    "FLAGGED_URGENT": 339,
+    "ESCALATED": 201,
+    "REJECTED": 42
+  },
+  "retained_coverage": {
+    "value": 0.6067961165048543,
+    "ci95": [
+      0.5549417583189853,
+      0.6539059391773517
+    ]
+  },
+  "ungated_all_images": {
+    "sensitivity": {
+      "value": 0.9974160206718347,
+      "ci95": [
+        0.9912241541353384,
+        1.0
+      ]
+    },
+    "specificity": {
+      "value": 0.6536796536796536,
+      "ci95": [
+        0.5876854066985646,
+        0.7166898148148148
+      ]
+    }
+  },
+  "gated_accepted_only": {
+    "sensitivity": {
+      "value": 1.0,
+      "ci95": [
+        1.0,
+        1.0
+      ]
+    },
+    "specificity": {
+      "value": 0.72,
+      "ci95": [
+        0.5918367346938775,
+        0.8409801136363636
+      ]
+    }
+  },
+  "errors_on_accepted": {
+    "false_negatives_among_accepted_pneumonia": {
+      "k": 0,
+      "n": 325,
+      "rate": 0.0,
+      "wilson95": [
+        0.0,
+        0.011682220254371706
+      ]
+    },
+    "false_positives_among_accepted_normal": {
+      "k": 14,
+      "n": 50,
+      "rate": 0.28,
+      "wilson95": [
+        0.17474014357680362,
+        0.4166538714598967
+      ]
+    },
+    "false_clearance_rate_among_CLEARED": {
+      "k": 0,
+      "n": 36,
+      "rate": 0.0,
+      "wilson95": [
+        0.0,
+        0.09642183044857634
+      ]
+    },
+    "false_alarm_rate_among_FLAGGED": {
+      "k": 14,
+      "n": 339,
+      "rate": 0.04129793510324484,
+      "wilson95": [
+        0.02475695420868038,
+        0.06811858948263365
+      ]
+    }
+  },
+  "ece": {
+    "cal_before": 0.004425174606304362,
+    "cal_after": 0.004435633919860679,
+    "test_before": 0.10073880649661929,
+    "test_after": 0.10947176062844831
+  }
+}
