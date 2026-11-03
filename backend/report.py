@@ -32,8 +32,7 @@ def generate_report(prediction_data: dict) -> BytesIO:
     
     # Disclaimer
     disclaimer = Paragraph(
-        "<b>DISCLAIMER:</b> This is a research prototype, not a certified medical device. "
-        "This output is a triage decision about an image, not a diagnosis or treatment plan.",
+        "<b>DISCLAIMER:</b> PneumoScan is an exploratory research tool for screening paediatric chest X-rays. Its output is not a diagnosis and has not been clinically validated. Results must be reviewed and confirmed by a qualified clinician or radiologist before any clinical decision.",
         styles["Normal"]
     )
     story.append(disclaimer)

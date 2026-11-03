@@ -13,6 +13,8 @@ async function boot() {
   try { ME = await loadProfile(); }
   catch (e) { await fbAuth.signOut(); return location.replace(ROLE_LOGIN[ROLE] + '?e=' + encodeURIComponent(e.message)); }
   if (ME.role !== ROLE) return location.replace(ROLE_HOME[ME.role]);   // never show another role's portal
+  if (ME.mfa_required && !ME.mfa_verified) return location.replace(ROLE_LOGIN[ROLE]);
+  if (ME.language && !localStorage.getItem('ps-lang') && window.setLang) setLang(ME.language, false);
   GATE_INFO = (await gateReq).gate || {};
   buildShell();
   window.addEventListener('hashchange', route);
@@ -47,7 +49,7 @@ function buildShell() {
   $('meName').textContent = ME.full_name || ME.email;
   $('meRole').textContent = ROLE_NAME[ROLE] + (ME.hospital ? ' · ' + ME.hospital : '');
   $('logoutBtn').innerHTML = icon('logout', 16);
-  $('logoutBtn').onclick = async () => { if (await confirmDialog('Sign out', 'You will need to sign in again to continue.', 'Sign out')) signOut(ROLE_LOGIN[ROLE]); };
+  $('logoutBtn').onclick = confirmSignOut;
   $('menuBtn').innerHTML = icon('menu');
   $('menuBtn').onclick = () => $('side').classList.toggle('open');
   $('bellBtn').innerHTML = icon('bell') + '<span class="dot hidden" id="bellDot"></span>';
@@ -56,6 +58,7 @@ function buildShell() {
   $('themeBtn').onclick = toggleTheme;
   document.addEventListener('themechange', () => { renderThemeBtn(); route(); });
   renderThemeBtn();
+  mountLangSelect($('langSel'));
   const nav = [...P.nav, {section: 'Account'}, {id: 'settings', label: 'Settings', icon: 'settings'}];
   $('nav').innerHTML = nav.map(n => n.section ? `<div class="sec">${n.section}</div>`
     : `<a href="#/${n.id}" data-page="${n.id}">${icon(n.icon)}<span>${n.label}</span><span class="count hidden" data-count="${n.id}"></span></a>`).join('');
@@ -218,6 +221,13 @@ function renderSettings() {
       ${card('Appearance', `<div class="row wrap"><div style="flex:1;min-width:200px"><div style="font-weight:700">Theme</div>
           <div class="small muted">Light is the default. System follows your device setting.</div></div>
           <div class="seg">${opt('light', 'sun', 'Light')}${opt('dark', 'moon', 'Dark')}${opt('system', 'monitor', 'System')}</div></div>`)}
+      ${card('Language', `<div class="row wrap"><div style="flex:1;min-width:200px"><div style="font-weight:700">Display language</div>
+          <div class="small muted">Applies to menus, buttons and labels. Clinical notes are not translated.</div></div>
+          <div class="seg">${LANGS.map(([v, l]) => `<button type="button" class="${currentLang() === v ? 'on' : ''}" onclick="setLang('${v}');route()">${l}</button>`).join('')}</div></div>`)}
+      ${ROLE !== 'clinician' ? card('Urgent alerts', `<form class="stack" onsubmit="saveAlerts(event)">
+          <div class="small muted">${ROLE === 'specialist' ? 'Get an email when an urgent referral arrives or waits too long.' : 'Get an email when an urgent referral is overdue.'}</div>
+          <div class="row"><div style="flex:1"><b>Email alerts</b><div class="small muted">${esc(ME.email)}</div></div><label class="switch"><input type="checkbox" id="alEmail" ${ME.alert_email !== false ? 'checked' : ''}><span></span></label></div>
+          <div class="row"><button type="button" class="btn secondary sm" id="alTest" onclick="testAlert()">${icon('send', 14)}Send test alert</button><span class="spacer"></span><button class="btn" id="alBtn">Save alerts</button></div></form>`) : ''}
       ${ROLE === 'specialist' ? card('Availability', `<div class="row"><div style="flex:1"><div style="font-weight:700">Accepting new referrals</div>
           <div class="small muted">When off, clinicians cannot send you new cases. Cases already in your queue stay there.</div></div>
           <label class="switch"><input type="checkbox" id="availToggle" ${ME.available !== false ? 'checked' : ''} onchange="setAvailability(this.checked)"><span></span></label></div>`) : ''}
@@ -227,6 +237,11 @@ function renderSettings() {
           <div class="field"><label>Email</label><input class="input" value="${esc(ME.email)}" disabled></div>
           <div class="row"><span class="badge b-accent plain">${ROLE_NAME[ROLE]}</span><span class="small muted">Roles are assigned by an administrator.</span>
             <span class="spacer"></span><button class="btn" id="pfBtn">Save profile</button></div></form>`)}
+      ${ROLE !== 'admin' ? card('Help & support', `<div class="help-list">
+          ${helpRow('faq', 'question', 'Frequently asked questions', 'Results, referrals, reports and your account.')}
+          ${helpRow('privacy', 'shield', 'Privacy policy', 'What PneumoScan stores and who can see it.')}
+          ${helpRow('terms', 'file', 'Terms of service', 'Conditions for using this research prototype.')}</div>
+          <p class="small muted" style="margin-top:12px">Need more help? Contact your PneumoScan administrator.</p>`) : ''}
     </div>
     <div class="stack">
       ${card('Change password', `<form class="stack" onsubmit="changePassword(event)">
@@ -234,12 +249,17 @@ function renderSettings() {
           <div class="field"><label>New password</label><input class="input" type="password" id="pwNew" minlength="8" autocomplete="new-password" required></div>
           <div class="field"><label>Confirm new password</label><input class="input" type="password" id="pwNew2" minlength="8" autocomplete="new-password" required></div>
           <div class="row"><span class="spacer"></span><button class="btn" id="pwBtn">${icon('lock', 16)}Update password</button></div></form>`)}
+      ${ROLE !== 'clinician' ? card('Two-factor sign-in', ME.mfa_enabled
+        ? `<div class="stack"><div class="row"><span class="badge b-ok">${icon('shield', 13)} On</span><span class="small muted">${ME.mfa_method === 'email' ? `A 6-digit code is emailed to ${esc(ME.email)} at every sign-in.` : 'A 6-digit code from your authenticator app is needed at every sign-in. You can also ask for a code by email.'}</span></div>
+            <div class="row"><span class="spacer"></span><button class="btn secondary" onclick="mfaDisable()">Turn off</button></div></div>`
+        : `<div class="stack"><div class="row"><span class="badge b-warn">Off</span><span class="small muted">Protect your account with an authenticator app such as Google Authenticator or Microsoft Authenticator.</span></div>
+            <div class="row wrap"><span class="spacer"></span><button class="btn secondary" onclick="mfaEmailSetup()">${icon('send', 16)}Use email codes</button><button class="btn" onclick="mfaSetup()">${icon('lock', 16)}Use authenticator app</button></div></div>`) : ''}
       ${card('Session', `<div class="stack small">
           <div class="row"><span class="muted">Signed in as</span><span class="spacer"></span><b>${esc(ME.email)}</b></div>
           <div class="row"><span class="muted">Member since</span><span class="spacer"></span><span>${fmtDate(ME.created_at, false)}</span></div>
           <div class="row"><span class="muted">Session storage</span><span class="spacer"></span><span>This browser tab only</span></div>
-          <div class="disclaimer">${icon('alert', 16)}<span>PneumoScan is a research prototype for decision support. It is not a certified medical device and does not replace clinical judgement.</span></div>
-          <div class="row"><span class="spacer"></span><button class="btn secondary" onclick="signOut(ROLE_LOGIN[ROLE])">${icon('logout', 16)}Sign out</button></div></div>`)}
+          ${disclaimerBox()}
+          <div class="row"><span class="spacer"></span><button class="btn secondary" onclick="confirmSignOut()">${icon('logout', 16)}Sign out</button></div></div>`)}
     </div>
   </div>`;
 }
@@ -255,6 +275,74 @@ async function saveProfile(e) {
       $('meRole').textContent = ROLE_NAME[ROLE] + (ME.hospital ? ' · ' + ME.hospital : '');
       toast('Profile saved', 'success');
     } catch (err) { toast(err.message, 'error'); }
+  });
+}
+async function saveAlerts(e) {
+  e.preventDefault();
+  const body = {alert_email: $('alEmail').checked};
+  await withBusy($('alBtn'), 'Saving…', async () => {
+    try { const r = await apiJSON('/api/users/me/profile', {method: 'PATCH', json: body}); ME.alert_email = r.alert_email; toast('Alert settings saved', 'success'); }
+    catch (err) { toast(err.message, 'error'); }
+  });
+}
+async function testAlert() {
+  await withBusy($('alTest'), 'Sending…', async () => {
+    try {
+      const r = await apiJSON('/api/users/me/test-alert', {method: 'POST'});
+      if (r.status === 'sent') toast(`Test email sent to ${ME.email}. Check the inbox (and spam).`, 'success');
+      else if (r.status === 'failed') toast(`The test email could not be sent: ${r.error || 'unknown error'}. Ask your administrator to check Email settings.`, 'error');
+      else toast('Test alert logged. Email is in test mode, so nothing was sent.', 'info');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+}
+async function mfaSetup() {
+  let s;
+  try { s = await apiJSON('/api/auth/mfa/setup', {method: 'POST'}); } catch (e) { return toast(e.message, 'error'); }
+  const m = openModal({title: 'Set up two-factor sign-in', body: `
+    <ol class="mfa-steps"><li>Open an authenticator app on your phone and scan this QR code.</li>
+      <li>If you cannot scan it, enter the key manually.</li><li>Type the 6-digit code the app shows.</li></ol>
+    <div class="mfa-qr">${s.qr_svg ? `<img src="${s.qr_svg}" alt="QR code for your authenticator app">` : ''}
+      <div><div class="label">Setup key</div><code class="mfa-key">${esc(s.secret.replace(/(.{4})/g, '$1 ').trim())}</code></div></div>
+    <div class="field" style="margin-top:14px"><label>6-digit code</label><input class="input mfa-code" id="mfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"></div>`,
+    footer: `<button class="btn secondary" data-close>Cancel</button><button class="btn" id="mfaOn">Turn on</button>`});
+  setTimeout(() => m.q('#mfaCode').focus(), 50);
+  m.q('#mfaOn').onclick = () => withBusy(m.q('#mfaOn'), 'Verifying…', async () => {
+    try {
+      const r = await apiJSON('/api/auth/mfa/enable', {method: 'POST', json: {code: m.q('#mfaCode').value}});
+      sessionStorage.setItem('ps-mfa', r.mfa_token);
+      ME.mfa_enabled = true; m.close();
+      openModal({title: 'Save your recovery codes', body: `<p class="muted" style="margin-bottom:12px">Two-factor sign-in is on. If you lose your phone, each code below signs you in once. Store them somewhere safe; they will not be shown again.</p>
+        <div class="recovery">${r.recovery_codes.map(c => `<code>${esc(c)}</code>`).join('')}</div>`,
+        footer: `<button class="btn secondary" onclick="navigator.clipboard.writeText('${r.recovery_codes.join('\\n')}').then(() => toast('Copied', 'success'))">Copy</button><button class="btn" data-close>Done</button>`});
+      route();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+async function mfaEmailSetup() {
+  let r;
+  try { r = await apiJSON('/api/auth/mfa/email/setup', {method: 'POST'}); } catch (e) { return toast(e.message, 'error'); }
+  const m = openModal({title: 'Set up email codes', body: `<p class="muted" style="margin-bottom:12px">We emailed a 6-digit code to <b>${esc(r.sent_to)}</b>. Enter it below. It expires in 10 minutes.</p>
+    <div class="field"><label>6-digit code</label><input class="input mfa-code" id="mfaECode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"></div>`,
+    footer: `<button class="btn secondary" data-close>Cancel</button><button class="btn" id="mfaEOn">Turn on</button>`});
+  setTimeout(() => m.q('#mfaECode').focus(), 50);
+  m.q('#mfaEOn').onclick = () => withBusy(m.q('#mfaEOn'), 'Verifying…', async () => {
+    try {
+      const x = await apiJSON('/api/auth/mfa/email/enable', {method: 'POST', json: {code: m.q('#mfaECode').value}});
+      sessionStorage.setItem('ps-mfa', x.mfa_token);
+      Object.assign(ME, {mfa_enabled: true, mfa_method: 'email'}); m.close();
+      openModal({title: 'Save your recovery codes', body: `<p class="muted" style="margin-bottom:12px">Two-factor sign-in is on. If you cannot get email, each code below signs you in once. Store them somewhere safe; they will not be shown again.</p>
+        <div class="recovery">${x.recovery_codes.map(c => `<code>${esc(c)}</code>`).join('')}</div>`, footer: `<button class="btn" data-close>Done</button>`});
+      route();
+    } catch (e) { toast(e.message, 'error'); }
+  });
+}
+function mfaDisable() {
+  const m = openModal({title: 'Turn off two-factor sign-in', body: `<p class="muted" style="margin-bottom:12px">Enter a current code from your authenticator app, or a recovery code.</p>
+    <div class="field"><label>Code</label><input class="input mfa-code" id="mfaOff" autocomplete="one-time-code"></div>`,
+    footer: `<button class="btn secondary" data-close>Cancel</button><button class="btn danger" id="mfaOffBtn">Turn off</button>`});
+  m.q('#mfaOffBtn').onclick = () => withBusy(m.q('#mfaOffBtn'), 'Turning off…', async () => {
+    try { await apiJSON('/api/auth/mfa/disable', {method: 'POST', json: {code: m.q('#mfaOff').value}}); ME.mfa_enabled = false; sessionStorage.removeItem('ps-mfa'); m.close(); toast('Two-factor sign-in turned off', 'success'); route(); }
+    catch (e) { toast(e.message, 'error'); }
   });
 }
 async function changePassword(e) {
@@ -443,4 +531,86 @@ function convItems(active) {
       <div class="small" style="color:var(--text-2)">${esc(c.other_name || '')}${c.priority === 'urgent' ? ' · <span style="color:var(--danger);font-weight:700">urgent</span>' : ''}</div>
       <div class="preview">${c.last_message ? (c.last_message.sender_id === ME.user_id ? 'You: ' : '') + esc(c.last_message.text) : 'No messages yet'}</div></div>
     ${c.unread && c.escalation_id !== active ? `<span class="count">${c.unread}</span>` : ''}</div>`).join('');
+}
+
+function confirmSignOut() {
+  confirmDialog('Sign out', 'You will need to sign in again to continue.', 'Sign out')
+    .then(ok => { if (ok) signOut(ROLE_LOGIN[ROLE]); });
+}
+
+/* ---------- help & support (clinician, specialist) ---------- */
+const helpRow = (kind, ico, title, sub) => `<button type="button" class="help-row" onclick="openHelp('${kind}')">
+  <span class="help-ico">${icon(ico, 17)}</span><span class="help-txt"><b>${title}</b><span class="small muted">${sub}</span></span>${icon('arrow', 16)}</button>`;
+const faqItem = (q, a) => `<details class="faq"><summary>${q}</summary><div>${a}</div></details>`;
+
+const FAQ_COMMON = [
+  ['What do the four results mean?', `<ul>
+    <li><b>Cleared</b>: the model is confident it found no pneumonia at its operating point. This is not a clinical clearance.</li>
+    <li><b>Flagged urgent</b>: the model is confident it found pneumonia. Prioritise clinical assessment.</li>
+    <li><b>Escalated</b>: the model is not confident either way, so the case should be reviewed by a specialist.</li>
+    <li><b>Rejected</b>: the image was not assessed because it does not look like a usable paediatric chest X-ray (wrong image type, poor quality or unusual view).</li></ul>`],
+  ['What does the heatmap show?', 'The Grad-CAM heatmap highlights the image regions that most influenced the model. It is not an outline of a lesion and is not shown for rejected images.'],
+  ['Is a PneumoScan result a diagnosis?', `No. ${DISCLAIMER}`],
+  ['How do messages work?', 'Each referral has a conversation between the referring clinician and the specialist. Open <b>Messages</b> in the menu. Messages are limited to 2,000 characters.'],
+  ['Why was I signed out?', 'You are signed out after 30 minutes without activity, with a warning 2 minutes before. Sessions are kept for this browser tab only, so closing the tab also signs you out.'],
+  ['I forgot my password. What do I do?', 'Use <b>Forgot password?</b> on the sign-in page to receive a reset email. If you are signed in, you can change it under <b>Settings → Change password</b>.'],
+];
+const FAQ_ROLE = {
+  clinician: [
+    ['Which images can I upload?', 'A frontal paediatric chest X-ray as a JPEG or PNG file, up to 10 MB.'],
+    ['How do I refer a case to a specialist?', 'Open the result and choose <b>Refer to a specialist</b>. Only specialists who are currently accepting referrals are listed. Set the priority, add notes, and send. You are notified when the specialist starts the review and when it is returned.'],
+    ['How do I record the final diagnosis?', 'On the case, choose <b>Record final diagnosis</b>. This records the confirmed outcome alongside the model\'s result and is used for performance monitoring.'],
+    ['How do I get a PDF report?', 'Use the <b>PDF report</b> button on a result. The report includes the triage result, confidence values and the disclaimer.'],
+  ],
+  specialist: [
+    ['How do referrals reach me?', 'Clinicians refer cases to you from their results. New referrals appear in your <b>Review queue</b>, urgent first and then oldest first, and you receive a notification.'],
+    ['What happens when I open a referral?', 'Opening a new referral starts the review. The referring clinician is notified that it has been acknowledged.'],
+    ['How do I return my review?', 'Fill in <b>Your review</b> on the case (diagnosis, findings and recommendation) and choose <b>Submit review</b>. The clinician is notified, and the case moves to <b>Completed</b>.'],
+    ['How do I stop receiving new referrals?', 'Turn off <b>Accepting new referrals</b> under <b>Settings → Availability</b>. Cases already in your queue stay there.'],
+  ],
+};
+
+const HELP = {
+  faq: {title: 'Frequently asked questions', body: () =>
+    `<div class="faq-list">${[...(FAQ_ROLE[ROLE] || []), ...FAQ_COMMON].map(([q, a]) => faqItem(q, a)).join('')}</div>`},
+  privacy: {title: 'Privacy policy', body: () => `<div class="legal">
+    <p class="small muted">PneumoScan research prototype · applies to all users of this application.</p>
+    <h4>1. What we store</h4>
+    <ul><li><b>Account data</b>: your name, email, role, health facility and availability, managed through Firebase Authentication and Cloud Firestore.</li>
+      <li><b>Patient data</b>: the patient details you register, such as name, age, sex and clinical findings.</li>
+      <li><b>Scans and results</b>: a downscaled copy of each uploaded X-ray, its heatmap, the model result and confidence values.</li>
+      <li><b>Workflow data</b>: referrals, specialist reviews, final diagnoses, messages and notifications.</li>
+      <li><b>Audit log</b>: a record of key actions, such as sign-in, uploads, referrals and user changes, with the time and user.</li></ul>
+    <h4>2. How it is used</h4>
+    <p>Data is used only to run the triage workflow, route referrals, produce reports, and monitor the model's performance for research. It is not sold or used for advertising.</p>
+    <h4>3. Who can see it</h4>
+    <p>Access is controlled by role. Clinicians see their own patients and cases. Specialists see the cases referred to them. Administrators manage accounts and can view monitoring data and the audit log.</p>
+    <h4>4. Storage and security</h4>
+    <p>Data is stored in Google Firebase (Cloud Firestore) and sent over encrypted connections. Every request is checked against your signed-in identity and role. Sessions end after 30 minutes of inactivity.</p>
+    <h4>5. Your responsibilities</h4>
+    <p>Enter only the patient information needed for triage. Use test or de-identified data unless the study's ethics approval permits otherwise.</p>
+    <h4>6. Retention and your rights</h4>
+    <p>Data is kept for the duration of the research project. To access, correct or delete your account or the data you entered, contact your PneumoScan administrator.</p></div>`},
+  terms: {title: 'Terms of service', body: () => `<div class="legal">
+    <p class="small muted">PneumoScan research prototype · by signing in you agree to these terms.</p>
+    <h4>1. Research use only</h4>
+    <p>${DISCLAIMER} PneumoScan is not a certified medical device.</p>
+    <h4>2. Clinical responsibility</h4>
+    <p>All clinical decisions remain the responsibility of the treating clinician. Results, heatmaps and reports support review; they do not replace clinical examination or specialist judgement.</p>
+    <h4>3. Accounts</h4>
+    <p>Accounts are for named, authorised users only. Keep your password private, do not share your account, and sign out on shared computers. Roles are assigned by an administrator.</p>
+    <h4>4. Acceptable use</h4>
+    <ul><li>Upload only paediatric chest X-rays that you are authorised to use.</li>
+      <li>Do not try to access data or functions outside your role.</li>
+      <li>Do not use the system to interfere with its operation or with other users.</li></ul>
+    <h4>5. Availability</h4>
+    <p>The prototype is provided as is, without guarantees of availability or accuracy, and may change or be withdrawn during the research project.</p>
+    <h4>6. Monitoring</h4>
+    <p>Key actions are recorded in an audit log, and final diagnoses and specialist reviews are compared with model results to evaluate performance.</p>
+    <h4>7. Contact</h4>
+    <p>For questions about these terms, contact your PneumoScan administrator.</p></div>`},
+};
+function openHelp(kind) {
+  const h = HELP[kind];
+  if (h) openModal({title: h.title, wide: true, body: h.body(), footer: '<button class="btn" data-close>Close</button>'});
 }

@@ -7,13 +7,15 @@ PORTALS.admin = {
     {id: 'referrals', label: 'Referrals', icon: 'send'},
     {section: 'Management'},
     {id: 'users', label: 'Users', icon: 'users'},
-    {id: 'audit', label: 'Audit log', icon: 'file'}],
+    {id: 'audit', label: 'Audit log', icon: 'file'},
+    {id: 'email', label: 'Email settings', icon: 'send'}],
   pages: {
     overview: {title: 'Overview', render: adOverview, after: adOverviewCharts},
     monitoring: {title: 'Model monitoring', render: adMonitoring, after: adMonitoringCharts},
     referrals: {title: 'Referrals', render: adReferrals, after: () => adFilterReferrals()},
     users: {title: 'Users', render: adUsers, after: () => adFilterUsers()},
     audit: {title: 'Audit log', render: adAudit, after: () => adFilterAudit()},
+    email: {title: 'Email settings', render: adEmail},
   },
 };
 const STATE_COLOR = c => ({CLEARED: c.ok, FLAGGED_URGENT: c.danger, ESCALATED: c.warn, REJECTED: c.gray});
@@ -62,10 +64,10 @@ async function adAnnounce(e) {
 function adOverviewCharts() {
   const c = chartColors(), sc = STATE_COLOR(c);
   makeChart('chDaily', {type: 'bar', data: {labels: adMon.daily.map(d => d.date.slice(5)),
-    datasets: Object.keys(STATE).map(s => ({label: STATE[s].label, data: adMon.daily.map(d => d[s]), backgroundColor: sc[s], borderRadius: 4, stack: 'a'}))},
+    datasets: Object.keys(STATE).map(s => ({label: tr(STATE[s].label), data: adMon.daily.map(d => d[s]), backgroundColor: sc[s], borderRadius: 4, stack: 'a'}))},
     options: {maintainAspectRatio: false, plugins: {legend: {position: 'bottom', labels: {boxWidth: 10}}}, scales: {x: {grid: {display: false}}, y: {beginAtZero: true, ticks: {precision: 0}}}}});
   const st = adStats.by_state || {};
-  makeChart('chMix', {type: 'doughnut', data: {labels: Object.keys(STATE).map(s => STATE[s].label),
+  makeChart('chMix', {type: 'doughnut', data: {labels: Object.keys(STATE).map(s => tr(STATE[s].label)),
     datasets: [{data: Object.keys(STATE).map(s => st[s] || 0), backgroundColor: Object.keys(STATE).map(s => sc[s]), borderWidth: 0}]},
     options: {maintainAspectRatio: false, cutout: '68%', plugins: {legend: {position: 'bottom', labels: {boxWidth: 10}}}}});
 }
@@ -101,6 +103,22 @@ async function adMonitoring() {
           <p class="small muted" style="margin-top:6px">Escalated cases count with the model's leaning. Missed pneumonia (bottom-left) is the most important error.</p>`
         : emptyState('target', 'No confirmed outcomes yet', 'Confirmed diagnoses from specialists and clinicians build this matrix.'), {sub: `${adMon.agreement.confirmed} confirmed case(s)`})}
     </div>
+    <div class="grid g-2-1" style="margin-bottom:18px">
+      ${card('Calibration on confirmed cases', adMon.calibration && adMon.calibration.n ? `<div class="chart-box"><canvas id="chCal"></canvas></div>
+          <div class="kv" style="margin-top:12px"><div><div class="k">Confirmed cases</div><div class="v">${adMon.calibration.n}</div></div>
+            <div><div class="k">ECE (live)</div><div class="v">${adMon.calibration.ece != null ? adMon.calibration.ece.toFixed(3) : '—'}</div></div>
+            <div><div class="k">Brier score</div><div class="v">${adMon.calibration.brier != null ? adMon.calibration.brier.toFixed(3) : '—'}</div></div>
+            <div><div class="k">ECE (test set)</div><div class="v">${g.ece_after != null ? g.ece_after.toFixed(3) : '—'}</div></div></div>
+          ${adMon.calibration.enough ? '' : `<p class="small muted" style="margin-top:10px">Fewer than ${adMon.calibration.min_cases} confirmed cases: treat this curve as provisional.</p>`}`
+        : emptyState('target', 'No confirmed outcomes yet', 'Once clinicians or specialists confirm diagnoses, this chart compares predicted probability with how often pneumonia was confirmed.'),
+        {sub: 'Predicted P(pneumonia) against the confirmed pneumonia rate, in five bins. Points on the dashed line are perfectly calibrated.'})}
+      ${card('Model versions in use', `<div class="stack small">
+          <div><div class="label">Deployed now</div><code class="mfa-key">${esc(adMon.current_model_version || '—')}</code></div>
+          <div><div class="label">Weights SHA-256</div><code class="mfa-key" style="font-size:11px">${esc(adCard.weights_sha256 || '—')}</code></div>
+          <div><div class="label">Predictions by version</div>${Object.keys(adMon.model_versions || {}).length ? Object.entries(adMon.model_versions).sort((a, b) => b[1] - a[1]).map(([v, n]) =>
+            `<div class="row" style="padding:4px 0"><span class="mono" style="word-break:break-all">${esc(v)}</span>${v === adMon.current_model_version ? '<span class="badge b-ok">current</span>' : ''}<span class="spacer"></span><b>${n}</b></div>`).join('') : '<span class="muted">—</span>'}</div>
+          <p class="muted">Every prediction stores the model and gate file hashes, so each result can be traced to the exact model that produced it.</p></div>`)}
+    </div>
     <div class="grid g-1-1" style="margin-bottom:18px">
       ${card('Specialist referrals', `<div class="kv"><div><div class="k">Open · urgent</div><div class="v">${adMon.referrals.open_by_priority.urgent || 0}</div></div>
           <div><div class="k">Open · routine</div><div class="v">${adMon.referrals.open_by_priority.routine || 0}</div></div>
@@ -125,26 +143,49 @@ async function adMonitoring() {
 }
 function adMonitoringCharts() {
   const c = chartColors();
+  const cal = adMon.calibration;
+  if (cal && cal.n) makeChart('chCal', {type: 'scatter', data: {datasets: [
+      {label: tr('Perfect calibration'), data: [{x: 0, y: 0}, {x: 1, y: 1}], showLine: true, borderDash: [6, 6], borderColor: c.gray, pointRadius: 0},
+      {label: 'PneumoScan', data: cal.bins.filter(b => b.n).map(b => ({x: b.mean_predicted, y: b.observed, n: b.n})), showLine: true,
+       borderColor: c.accent, backgroundColor: c.accent, pointRadius: ctx => Math.min(4 + Math.sqrt(ctx.raw?.n || 1), 12)}]},
+    options: {maintainAspectRatio: false, plugins: {tooltip: {callbacks: {label: ctx => ctx.datasetIndex ? `Predicted ${ctx.raw.x.toFixed(2)} · observed ${ctx.raw.y.toFixed(2)} · n=${ctx.raw.n}` : ''}}},
+      scales: {x: {min: 0, max: 1, title: {display: true, text: tr('Mean predicted P(pneumonia)')}}, y: {min: 0, max: 1, title: {display: true, text: tr('Confirmed pneumonia rate')}}}}});
   makeChart('chHist', {type: 'bar', data: {labels: adMon.probability_histogram.map((_, i) => `${(i / 10).toFixed(1)}–${((i + 1) / 10).toFixed(1)}`),
-    datasets: [{label: 'Scans', data: adMon.probability_histogram, borderRadius: 5,
+    datasets: [{label: tr('Scans'), data: adMon.probability_histogram, borderRadius: 5,
       backgroundColor: adMon.probability_histogram.map((_, i) => i < 3 ? c.ok : i > 6 ? c.danger : c.warn)}]},
     options: {maintainAspectRatio: false, plugins: {legend: {display: false}}, scales: {x: {grid: {display: false}}, y: {beginAtZero: true, ticks: {precision: 0}}}}});
 }
 
 /* ---------- referrals ---------- */
 let adRefs = [], adRefStatus = '';
+let adAlerts = {alerts: [], providers: {}, sla: {}};
 async function adReferrals() {
-  adRefs = (await apiJSON('/api/escalations?images=false')).escalations;
+  [adRefs, adAlerts] = await Promise.all([apiJSON('/api/escalations?images=false').then(d => d.escalations), apiJSON('/api/admin/alerts')]);
   const seg = (v, l) => `<button class="${adRefStatus === v ? 'on' : ''}" onclick="adRefStatus='${v}';this.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));this.classList.add('on');adFilterReferrals()">${l}</button>`;
-  return `${intro('All referrals', 'Every case sent to a specialist, with waiting and turnaround times.')}
-    <div class="card"><div class="card-h"><div class="seg">${seg('', 'All')}${seg('sent', 'Awaiting')}${seg('pending', 'In review')}${seg('resolved', 'Resolved')}</div></div><div id="adRefTable"></div></div>`;
+  const P = adAlerts.providers || {}, S = adAlerts.sla || {};
+  return `${intro('All referrals', `Every case sent to a specialist, with waiting and turnaround times. Unopened referrals trigger a reminder after ${duration((S.urgent_minutes || 30) / 60)} (urgent) or ${duration((S.routine_minutes || 1440) / 60)} (routine), and administrators are alerted at twice that.`,
+      `<button class="btn secondary" id="sweepBtn" onclick="adSweep()">${icon('refresh', 16)}Run reminder check</button>`)}
+    <div class="card" style="margin-bottom:18px"><div class="card-h"><div class="seg">${seg('', 'All')}${seg('sent', 'Awaiting')}${seg('pending', 'In review')}${seg('resolved', 'Resolved')}</div></div><div id="adRefTable"></div></div>
+    ${card('Urgent alert delivery', adAlerts.alerts.length ? `<div class="table-wrap"><table class="t alert-log"><thead><tr><th>When</th><th>To</th><th>Message</th><th>Status</th></tr></thead><tbody>
+        ${adAlerts.alerts.map(a => `<tr><td class="small muted">${fmtDate(a.created_at)}</td><td class="mono small">${esc(a.to)}</td>
+          <td><b>${esc(a.subject)}</b><div class="small muted">${esc(a.body)}</div></td>
+          <td><span class="badge ${a.status === 'sent' ? 'b-ok' : a.status === 'failed' ? 'b-danger' : 'b-warn'}" title="${esc(a.error || '')}">${a.status === 'logged' ? 'Logged (test mode)' : esc(a.status)}</span></td></tr>`).join('')}</tbody></table></div>`
+      : emptyState('send', 'No alerts yet', 'Urgent referrals and overdue reminders appear here.'),
+      {flush: !!adAlerts.alerts.length, sub: `Email: ${P.email === 'smtp' ? 'sending on (see each row for the result)' : 'test mode (not sent)'}`})}`;
+}
+async function adSweep() {
+  await withBusy($('sweepBtn'), 'Checking…', async () => {
+    try { const r = await apiJSON('/api/admin/referrals/sweep', {method: 'POST'}); toast(`${r.reminded} reminder(s) and ${r.overdue} overdue alert(s) sent`, 'success'); route(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
 }
 function adFilterReferrals() {
   const rows = adRefs.filter(r => !adRefStatus || r.status === adRefStatus);
-  $('adRefTable').innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Patient</th><th>Clinician</th><th>Specialist</th><th>Priority</th><th>Status</th><th>Wait / turnaround</th><th>Diagnosis</th><th>AI</th></tr></thead><tbody>
+  $('adRefTable').innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Patient</th><th>Clinician</th><th>Specialist</th><th>Priority</th><th>Status</th><th>Wait / turnaround</th><th>Diagnosis</th><th>AI</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.patient_name || 'Unknown')}</b><div class="small muted">${fmtDate(r.created_at)}</div></td><td>${esc(r.clinician_name || '—')}</td><td>${esc(r.specialist_name || '—')}</td>
-      <td>${priorityBadge(r.priority)}</td><td>${escBadge(r.status)}</td><td>${r.status === 'resolved' ? duration((new Date(r.resolved_at) - new Date(r.created_at)) / 36e5) : waitLabel(r.created_at)}</td>
-      <td>${outcomeBadge(r.confirmed_outcome)}</td><td>${r.ai_agrees == null ? '<span class="muted">—</span>' : r.ai_agrees ? '<span class="badge b-ok">Agrees</span>' : '<span class="badge b-danger">Disagrees</span>'}</td></tr>`).join('')}</tbody></table></div>`
+      <td><div class="row" style="gap:6px">${priorityBadge(r.priority)}${overdueBadge(r)}</div></td><td>${escBadge(r.status)}</td><td>${r.status === 'resolved' ? duration((new Date(r.resolved_at) - new Date(r.created_at)) / 36e5) : waitLabel(r.created_at)}</td>
+      <td>${outcomeBadge(r.confirmed_outcome)}</td><td>${r.ai_agrees == null ? '<span class="muted">—</span>' : r.ai_agrees ? '<span class="badge b-ok">Agrees</span>' : '<span class="badge b-danger">Disagrees</span>'}</td>
+      <td>${r.status !== 'resolved' ? `<button class="btn sm secondary" onclick="clReassign('${esc(r.escalation_id)}', '${esc(r.assigned_to)}')">${icon('refresh', 14)}Reassign</button>` : ''}</td></tr>`).join('')}</tbody></table></div>`
     : emptyState('send', 'No referrals', '');
 }
 
@@ -160,14 +201,19 @@ async function adUsers() {
 function adFilterUsers() {
   const q = ($('usSearch')?.value || '').toLowerCase(), r = $('usRole')?.value;
   const rows = adUsersList.filter(u => (!r || u.role === r) && (!q || (u.full_name || '').toLowerCase().includes(q) || (u.email || '').toLowerCase().includes(q)));
-  $('usTable').innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>User</th><th>Role</th><th>Facility</th><th>Active</th><th>Takes referrals</th><th>Joined</th></tr></thead><tbody>
+  $('usTable').innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>User</th><th>Role</th><th>Facility</th><th>Active</th><th>Takes referrals</th><th>Two-factor</th><th>Joined</th></tr></thead><tbody>
     ${rows.map(u => { const self = u.user_id === ME.user_id; return `<tr><td><div class="row"><div class="avatar">${initials(u.full_name)}</div><div><b>${esc(u.full_name || '—')}</b>${self ? ' <span class="badge b-accent plain">You</span>' : ''}<div class="small muted">${esc(u.email)}</div></div></div></td>
       <td><select class="input" style="height:34px;width:140px" ${self ? 'disabled' : ''} onchange="adUpdateUser('${esc(u.user_id)}',{role:this.value})">${['clinician', 'specialist', 'admin'].map(x => `<option value="${x}" ${u.role === x ? 'selected' : ''}>${ROLE_NAME[x]}</option>`).join('')}</select></td>
       <td class="small">${esc(u.hospital || '—')}</td>
       <td><label class="switch"><input type="checkbox" ${u.is_active !== false ? 'checked' : ''} ${self ? 'disabled' : ''} onchange="adUpdateUser('${esc(u.user_id)}',{is_active:this.checked})"><span></span></label></td>
       <td>${u.role === 'specialist' ? `<label class="switch"><input type="checkbox" ${u.available !== false ? 'checked' : ''} onchange="adUpdateUser('${esc(u.user_id)}',{available:this.checked})"><span></span></label>` : '<span class="muted">—</span>'}</td>
+      <td>${u.role === 'clinician' ? '<span class="muted">—</span>' : u.mfa_enabled ? `<div class="row" style="gap:6px"><span class="badge b-ok">On</span>${self ? '' : `<button class="btn sm ghost" onclick="adResetMfa('${esc(u.user_id)}', '${esc(u.full_name || u.email)}')">Reset</button>`}</div>` : '<span class="badge b-warn">Off</span>'}</td>
       <td class="small muted">${fmtDate(u.created_at, false)}</td></tr>`; }).join('')}</tbody></table></div>`
     : emptyState('users', 'No users match', '');
+}
+function adResetMfa(uid, name) {
+  confirmDialog('Reset two-factor sign-in', `${name} will sign in with only their password until they set up two-factor again. Do this only after confirming their identity.`, 'Reset', true)
+    .then(ok => ok && adUpdateUser(uid, {reset_mfa: true}).then(() => { const u = adUsersList.find(x => x.user_id === uid); if (u) { u.mfa_enabled = false; delete u.reset_mfa; } adFilterUsers(); }));
 }
 async function adUpdateUser(uid, change) {
   try {
@@ -226,4 +272,49 @@ function adFilterAudit() {
 function adExportAudit() {
   downloadCSV('pneumoscan_audit_log.csv', ['timestamp', 'user', 'email', 'action', 'case_id'],
     adAuditRows().map(l => [l.timestamp, l.full_name, l.email, l.action, l.prediction_id]));
+}
+
+/* ---------- email settings ---------- */
+async function adEmail() {
+  const e = await apiJSON('/api/admin/email-settings');
+  const env = e.source === 'environment';
+  const status = e.enabled ? `<span class="badge b-ok">${icon('check', 13)} Sending emails</span>` : '<span class="badge b-warn">Test mode: alerts are logged, not sent</span>';
+  return `${intro('Email settings', 'The account PneumoScan uses to email urgent-referral alerts to specialists and administrators. Saved once on the server, so it keeps working after restarts and deployment.')}
+  <div class="grid g-2-1">
+    ${card('Sending account', `<form class="stack" onsubmit="adSaveEmail(event)">
+        <div class="row">${status}${env ? '<span class="small muted">Set by server environment variables, which override this form.</span>' : ''}</div>
+        <div class="field"><label>Gmail address *</label><input class="input" id="emUser" type="email" placeholder="pneumoscan.alerts@gmail.com" value="${esc(e.user || '')}" ${env ? 'disabled' : ''}></div>
+        <div class="field"><label>App password ${e.password_set ? '' : '*'}</label><div class="input-wrap"><input class="input" id="emPass" type="password" autocomplete="new-password" placeholder="${e.password_set ? 'Saved. Leave blank to keep it' : '16-character app password'}" ${env ? 'disabled' : ''}>
+          <button type="button" class="reveal" onclick="const i=$('emPass');i.type=i.type==='password'?'text':'password'">Show</button></div>
+          <div class="small muted">Stored only on the server. It is never shown again or sent to any browser.</div></div>
+        <div class="field"><label>Sender name</label><input class="input" id="emSender" value="${esc(e.sender || 'PneumoScan')}" ${env ? 'disabled' : ''}></div>
+        <details class="faq"><summary>Advanced: other email providers</summary><div><div class="grid g2" style="gap:12px">
+          <div class="field"><label>SMTP server</label><input class="input" id="emHost" value="${esc(e.host || 'smtp.gmail.com')}" ${env ? 'disabled' : ''}></div>
+          <div class="field"><label>Port</label><select class="input" id="emPort" ${env ? 'disabled' : ''}>${[587, 465].map(x => `<option ${+e.port === x ? 'selected' : ''} value="${x}">${x}${x === 587 ? ' (STARTTLS)' : ' (SSL)'}</option>`).join('')}</select></div></div></div></details>
+        <div class="row"><div style="flex:1"><b>Send email alerts</b><div class="small muted">Off keeps PneumoScan in test mode.</div></div><label class="switch"><input type="checkbox" id="emOn" ${e.enabled || !e.user ? 'checked' : ''} ${env ? 'disabled' : ''}><span></span></label></div>
+        <div class="row"><button type="button" class="btn secondary" id="emTest" onclick="adTestEmail()">${icon('send', 15)}Send test email to me</button><span class="spacer"></span>
+          <button class="btn" id="emSave" ${env ? 'disabled' : ''}>Save settings</button></div>
+        ${e.updated_at ? `<div class="small muted">Last updated ${fmtDate(e.updated_at)}</div>` : ''}</form>`)}
+    ${card('How to get a Gmail app password', `<ol class="mfa-steps">
+        <li>Sign in to the Gmail account that should send alerts (a dedicated account is best).</li>
+        <li>Turn on 2-Step Verification at <a href="https://myaccount.google.com/security" target="_blank" rel="noopener">myaccount.google.com/security</a>.</li>
+        <li>Open <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>, create one named "PneumoScan" and copy the 16-character code.</li>
+        <li>Paste the address and code here, save, then click <b>Send test email to me</b>.</li></ol>
+        <p class="small muted">Your normal Gmail password will not work. If you change the Google password, create a new app password.</p>`)}
+  </div>`;
+}
+async function adSaveEmail(ev) {
+  ev.preventDefault();
+  const body = {user: $('emUser').value.trim(), password: $('emPass').value.trim() || null, sender: $('emSender').value.trim(),
+                host: $('emHost').value.trim(), port: +$('emPort').value, enabled: $('emOn').checked};
+  await withBusy($('emSave'), 'Saving…', async () => {
+    try { await apiJSON('/api/admin/email-settings', {method: 'PUT', json: body}); toast('Email settings saved', 'success'); route(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+}
+async function adTestEmail() {
+  await withBusy($('emTest'), 'Sending…', async () => {
+    try { const r = await apiJSON('/api/admin/email-settings/test', {method: 'POST'}); toast(`Test email sent to ${r.to}. Check the inbox (and spam).`, 'success'); }
+    catch (e) { toast(e.message, 'error'); }
+  });
 }
