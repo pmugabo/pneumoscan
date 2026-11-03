@@ -18,6 +18,9 @@ to have a model.
 """
 from __future__ import annotations
 
+import hashlib
+from typing import Optional
+
 import base64
 import io
 import json
@@ -69,7 +72,28 @@ class Engine:
                      "distance_threshold": None}
         self.means = None
         self.precision = None
+        self.weights_sha256 = None
+        self.gate_sha256 = None
         self._load()
+
+    @staticmethod
+    def _sha256(path: Path) -> Optional[str]:
+        if not path.exists():
+            return None
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    @property
+    def version(self) -> str:
+        """Architecture plus the first 12 hex digits of the weights and gate file hashes."""
+        if self.demo:
+            return "none"
+        w = (self.weights_sha256 or "")[:12]
+        g = (self.gate_sha256 or "")[:8]
+        return f"{self.arch}@{w}" + (f"+gate.{g}" if g else "")
 
     # ---------------------------------------------------------------- load
     def _load(self):
@@ -86,6 +110,8 @@ class Engine:
             print(f"[engine] DEMO MODE — {weights.name} not found")
             return
 
+        self.weights_sha256 = self._sha256(weights)
+        self.gate_sha256 = self._sha256(gate_file)
         self.model = self._build(self.arch)
         state = torch.load(weights, map_location="cpu", weights_only=True)
         self.model.load_state_dict(state)
@@ -219,7 +245,7 @@ class Engine:
             state=state,
             label="Pneumonia" if prob >= 0.5 else "Normal",
             probability=prob, confidence=conf, ood_score=dist, reason=reason,
-            heatmap_png=heat, model_version=f"{self.arch}",
+            heatmap_png=heat, model_version=self.version,
             thresholds={"confidence": gate_conf, "pneumonia": t_pneu, "normal": t_norm,
                         "distance": None if not np.isfinite(dist_thr) else dist_thr,
                         "temperature": T},
@@ -248,6 +274,8 @@ class Engine:
         gate = {k: (None if isinstance(v, float) and not np.isfinite(v) else v)
                 for k, v in self.gate.items()}
         return {"demo_mode": self.demo, "architecture": self.arch, "gate": gate,
+                "model_version": self.version, "weights_sha256": self.weights_sha256,
+                "gate_sha256": self.gate_sha256,
                 "states": ["CLEARED", "FLAGGED_URGENT", "ESCALATED", "REJECTED"]}
 
 

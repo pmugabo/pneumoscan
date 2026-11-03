@@ -69,6 +69,8 @@ const ICON_PATHS = {
 };
 const icon = (name, size) => `<svg class="i" viewBox="0 0 24 24"${size ? ` style="width:${size}px;height:${size}px"` : ''}>${ICON_PATHS[name] || ''}</svg>`;
 
+const DISCLAIMER = 'PneumoScan is an exploratory research tool for screening paediatric chest X-rays. Its output is not a diagnosis and has not been clinically validated. Results must be reviewed and confirmed by a qualified clinician or radiologist before any clinical decision.';
+const disclaimerBox = (style = '') => `<div class="disclaimer"${style ? ` style="${style}"` : ''}>${icon('alert', 16)}<span><b>Disclaimer:</b> ${DISCLAIMER}</span></div>`;
 const STATE = {
   CLEARED:        {label: 'Cleared',        short: 'Normal',     icon: 'check',    tone: 'ok',
                    desc: 'Model is confident the radiograph is normal.'},
@@ -82,7 +84,11 @@ const STATE = {
 const stateBadge = s => `<span class="badge b-${esc(s)}">${esc((STATE[s] || {label: s || '—'}).label)}</span>`;
 const ESC_STATUS = {sent: 'Awaiting review', pending: 'In review', resolved: 'Resolved'};
 const escBadge = s => `<span class="badge b-${esc(s)}">${esc(ESC_STATUS[s] || s)}</span>`;
-const outcomeBadge = o => o ? `<span class="badge b-${esc(o)}">${esc(o[0].toUpperCase() + o.slice(1))}</span>` : '<span class="muted">—</span>';
+const outcomeBadge = o => !o ? '<span class="muted">—</span>' : o === 'unknown' ? '<span class="badge b-warn">Pending follow-up</span>'
+  : `<span class="badge b-${esc(o)}">${esc(o[0].toUpperCase() + o.slice(1))}</span>`;
+const overdueBadge = e => e && e.overdue ? '<span class="badge b-danger">Overdue</span>' : '';
+const consentBadge = p => p && p.consent && p.consent.given ? '<span class="badge b-ok">Consent recorded</span>'
+  : p && p.consent && p.consent.withdrawn_at ? '<span class="badge b-danger">Consent withdrawn</span>' : '<span class="badge b-warn">No consent</span>';
 const priorityBadge = p => p === 'urgent' ? '<span class="badge b-urgent">Urgent</span>' : '<span class="badge b-routine">Routine</span>';
 const ROLE_HOME = {clinician: '/clinician', specialist: '/specialist', admin: '/admin'};
 const ROLE_LOGIN = {clinician: '/login', specialist: '/specialist/login', admin: '/admin/login'};
@@ -177,6 +183,8 @@ async function api(url, opts = {}) {
   await fbReady;
   const headers = {...(opts.headers || {})};
   if (fbAuth.currentUser) headers.Authorization = 'Bearer ' + await fbAuth.currentUser.getIdToken();
+  const mfaToken = sessionStorage.getItem('ps-mfa');
+  if (mfaToken) headers['X-MFA-Token'] = mfaToken;
   if (opts.json !== undefined) { headers['Content-Type'] = 'application/json'; opts = {...opts, body: JSON.stringify(opts.json)}; }
   return fetch(url, {...opts, headers});
 }
@@ -186,6 +194,9 @@ async function apiJSON(url, opts = {}) {
   try { data = await res.json(); } catch (_) { /* non-JSON body */ }
   if (!res.ok) {
     const d = data && data.detail;
+    if (res.status === 401 && d === 'Two-factor verification required.' && !location.pathname.endsWith('/login')) {
+      location.replace(location.pathname.startsWith('/admin') ? '/admin/login' : '/specialist/login');
+    }
     throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d.map(x => x.msg).join('; ') : `Request failed (${res.status})`);
   }
   return data;

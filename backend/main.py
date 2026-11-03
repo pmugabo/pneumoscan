@@ -26,6 +26,9 @@ from __future__ import annotations
 import base64
 import io
 import json
+import secrets
+import os
+import re
 import threading
 import time
 import uuid
@@ -44,7 +47,7 @@ from google.cloud.firestore_v1 import FieldFilter, Query
 from PIL import Image
 from pydantic import BaseModel
 
-from . import firebase
+from . import alerts, firebase, mfa
 from .inference import engine
 from .report import generate_report
 
@@ -61,13 +64,19 @@ DANGER_SIGNS = ("chest_indrawing", "unable_to_feed", "lethargy", "convulsions",
 MAX_MESSAGE_CHARS = 2000
 OUTCOME_BASIS = ("specialist_review", "clinical_exam", "laboratory", "treatment_response",
                  "repeat_imaging", "clinical_course")
+MFA_ROLES = ("specialist", "admin")
+LANGUAGES = ("en", "fr", "rw")
+CONSENT_VERSION = "2026-10-v1"
+CONSENT_METHODS = ("verbal", "written")
+URGENT_SLA_MIN = int(os.environ.get("URGENT_REFERRAL_SLA_MINUTES", "30"))
+ROUTINE_SLA_MIN = int(os.environ.get("ROUTINE_REFERRAL_SLA_HOURS", "24")) * 60
 EXAM_FINDINGS = ("crackles", "bronchial_breathing", "reduced_breath_sounds", "dullness",
                  "wheeze", "clear_chest", "fast_breathing", "chest_indrawing")
 
 app = FastAPI(
     title="PneumoScan API",
     description=("Autonomous chest X-ray triage with a confidence gate. "
-                 "Research prototype — not a certified diagnostic device."),
+                 "Disclaimer: PneumoScan is an exploratory research tool for screening paediatric chest X-rays. Its output is not a diagnosis and has not been clinically validated. Results must be reviewed and confirmed by a qualified clinician or radiologist before any clinical decision."),
     version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"])
@@ -172,8 +181,7 @@ def forget_profile(uid: str):
     _profiles.pop(uid, None)
 
 
-def current_user(authorization: Optional[str] = Header(None)) -> dict:
-    claims = _decode(authorization)
+def _load_profile(claims: dict) -> dict:
     uid = claims["uid"]
     cached = _profiles.get(uid)
     if cached and cached[0] > time.monotonic():
@@ -187,6 +195,31 @@ def current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not user.get("is_active", True):
         raise HTTPException(403, "User account is deactivated.")
     return user
+
+
+def mfa_required(user: dict) -> bool:
+    return bool(user.get("mfa_enabled")) and user.get("role") in MFA_ROLES
+
+
+def _mfa_ok(user: dict, claims: dict, token: Optional[str]) -> bool:
+    return not mfa_required(user) or mfa.token_valid(token, user["user_id"], claims.get("auth_time"))
+
+
+def current_user(authorization: Optional[str] = Header(None),
+                 x_mfa_token: Optional[str] = Header(None)) -> dict:
+    claims = _decode(authorization)
+    user = _load_profile(claims)
+    if not _mfa_ok(user, claims, x_mfa_token):
+        raise HTTPException(401, "Two-factor verification required.")
+    return user
+
+
+def session_user(authorization: Optional[str] = Header(None),
+                 x_mfa_token: Optional[str] = Header(None)) -> tuple[dict, dict, bool]:
+    """Signed-in user before the two-factor check (for /me and code verification)."""
+    claims = _decode(authorization)
+    user = _load_profile(claims)
+    return user, claims, _mfa_ok(user, claims, x_mfa_token)
 
 
 def require(*roles: str):
@@ -214,6 +247,7 @@ class Feedback(BaseModel):
 class UserRegister(BaseModel):
     full_name: str
     hospital: Optional[str] = None
+    language: Optional[str] = None
 
 
 class UserCreate(BaseModel):
@@ -227,6 +261,8 @@ class UserCreate(BaseModel):
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     hospital: Optional[str] = None
+    language: Optional[str] = None
+    alert_email: Optional[bool] = None
 
 
 class PatientCreate(BaseModel):
@@ -236,6 +272,28 @@ class PatientCreate(BaseModel):
     notes: Optional[str] = ""
     guardian_name: Optional[str] = None
     contact: Optional[str] = None
+    consent_given: bool = False
+    consent_by: Optional[str] = None
+    consent_relationship: Optional[str] = None
+    consent_method: Optional[str] = "verbal"
+    hide_identity: bool = True
+
+
+class ConsentUpdate(BaseModel):
+    given: bool
+    by: Optional[str] = None
+    relationship: Optional[str] = None
+    method: Optional[str] = "verbal"
+    reason: Optional[str] = None
+
+
+class Reassign(BaseModel):
+    specialist_id: str
+    reason: Optional[str] = ""
+
+
+class MfaCode(BaseModel):
+    code: str
 
 
 class PatientUpdate(BaseModel):
@@ -245,6 +303,7 @@ class PatientUpdate(BaseModel):
     notes: Optional[str] = None
     guardian_name: Optional[str] = None
     contact: Optional[str] = None
+    hide_identity: Optional[bool] = None
 
 
 class AdminUserUpdate(BaseModel):
@@ -253,6 +312,7 @@ class AdminUserUpdate(BaseModel):
     available: Optional[bool] = None
     full_name: Optional[str] = None
     hospital: Optional[str] = None
+    reset_mfa: Optional[bool] = None
 
 
 class Availability(BaseModel):
@@ -268,6 +328,15 @@ class EscalationCreate(BaseModel):
 
 class MessageCreate(BaseModel):
     text: str
+
+
+class EmailSettings(BaseModel):
+    user: str
+    password: Optional[str] = None     # blank keeps the stored password
+    sender: Optional[str] = "PneumoScan"
+    host: str = "smtp.gmail.com"
+    port: int = 587
+    enabled: bool = True
 
 
 class Announcement(BaseModel):
@@ -317,8 +386,165 @@ def firebase_config():
 
 # ------------------------------------------------------------------ auth endpoints
 @app.get("/api/auth/me")
-def me(user: dict = Depends(current_user)):
-    return user
+def me(session: tuple = Depends(session_user)):
+    user, _, verified = session
+    return {**user, "mfa_required": mfa_required(user), "mfa_verified": verified,
+            "mfa_email_available": alerts.email_configured()}
+
+
+_mfa_failures: dict = {}
+
+
+def _mfa_attempt_guard(uid: str):
+    recent = [t for t in _mfa_failures.get(uid, []) if t > time.monotonic() - 600]
+    _mfa_failures[uid] = recent
+    if len(recent) >= 5:
+        raise HTTPException(429, "Too many incorrect codes. Wait 10 minutes and try again.")
+
+
+def _mfa_fail(uid: str):
+    _mfa_failures.setdefault(uid, []).append(time.monotonic())
+    log(None, "mfa_failed", uid)
+    raise HTTPException(400, "That code is not valid. Check your authenticator app and try again.")
+
+
+def _check_mfa_code(uid: str, code: str) -> tuple[bool, bool]:
+    """(valid, used_recovery_code). A recovery code works once."""
+    ref = col("mfa").document(uid)
+    d = (ref.get().to_dict() or {})
+    if d.get("secret") and mfa.check(d["secret"], code):
+        return True, False
+    if d.get("email_code_hash") and (d.get("email_code_exp") or 0) > time.time() \
+            and mfa.hash_code((code or "").replace(" ", "")) == d["email_code_hash"]:
+        ref.update({"email_code_hash": None, "email_code_exp": None})
+        return True, False
+    h = mfa.hash_code(code)
+    if h in d.get("recovery_hashes", []):
+        ref.update({"recovery_hashes": firestore.ArrayRemove([h])})
+        return True, True
+    return False, False
+
+
+@app.post("/api/auth/mfa/verify")
+def mfa_verify(body: MfaCode, session: tuple = Depends(session_user)):
+    user, claims, _ = session
+    uid = user["user_id"]
+    if not mfa_required(user):
+        raise HTTPException(400, "Two-factor sign-in is not turned on for this account.")
+    _mfa_attempt_guard(uid)
+    ok, recovery = _check_mfa_code(uid, body.code)
+    if not ok:
+        _mfa_fail(uid)
+    token, exp = mfa.issue_token(uid, claims.get("auth_time"))
+    log(None, "mfa_verified" + (":recovery_code" if recovery else ""), uid)
+    return {"mfa_token": token, "expires_at": exp, "used_recovery_code": recovery}
+
+
+EMAIL_CODE_TTL_S = 600
+_email_code_sent: dict = {}
+
+
+def _email_code(uid: str, email: str, field: str, purpose: str) -> str:
+    """Create a 6-digit code, store its hash and email it. Raises if email cannot be sent."""
+    if not alerts.email_configured():
+        raise HTTPException(400, "Email is not set up yet. Ask your administrator to complete Admin > Email settings.")
+    last = _email_code_sent.get(uid, 0)
+    if time.monotonic() - last < 30:
+        raise HTTPException(429, "A code was just sent. Wait 30 seconds before asking for another.")
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    col("mfa").document(uid).set({f"{field}_hash": mfa.hash_code(code),
+                                   f"{field}_exp": time.time() + EMAIL_CODE_TTL_S}, merge=True)
+    try:
+        alerts._send_email(email, f"PneumoScan verification code: {code}",
+                           f"Your PneumoScan {purpose} code is {code}. It expires in 10 minutes.\n"
+                           "If you did not try to sign in, change your password and tell your administrator.")
+    except Exception as e:
+        raise HTTPException(502, f"Could not send the code by email: {str(e)[:200]}")
+    _email_code_sent[uid] = time.monotonic()
+    log(None, f"mfa_email_code_sent:{purpose}", uid)
+    return alerts.mask(email)
+
+
+@app.post("/api/auth/mfa/email/send")
+def mfa_email_send(session: tuple = Depends(session_user)):
+    user, _, _ = session
+    if not mfa_required(user):
+        raise HTTPException(400, "Two-factor sign-in is not turned on for this account.")
+    return {"sent_to": _email_code(user["user_id"], user["email"], "email_code", "sign-in")}
+
+
+@app.post("/api/auth/mfa/email/setup")
+def mfa_email_setup(user: dict = Depends(require(*MFA_ROLES))):
+    if user.get("mfa_enabled"):
+        raise HTTPException(400, "Two-factor sign-in is already on.")
+    return {"sent_to": _email_code(user["user_id"], user["email"], "pending_email_code", "setup")}
+
+
+@app.post("/api/auth/mfa/email/enable")
+def mfa_email_enable(body: MfaCode, authorization: Optional[str] = Header(None),
+                     user: dict = Depends(require(*MFA_ROLES))):
+    uid = user["user_id"]
+    _mfa_attempt_guard(uid)
+    ref = col("mfa").document(uid)
+    d = ref.get().to_dict() or {}
+    if not (d.get("pending_email_code_hash") and (d.get("pending_email_code_exp") or 0) > time.time()):
+        raise HTTPException(400, "The code has expired. Send a new one.")
+    if mfa.hash_code(body.code.replace(" ", "")) != d["pending_email_code_hash"]:
+        _mfa_fail(uid)
+    codes = mfa.recovery_codes()
+    ref.set({"method": "email", "secret": None, "enabled_at": now(),
+             "recovery_hashes": [mfa.hash_code(c) for c in codes]})
+    col("users").document(uid).update({"mfa_enabled": True, "mfa_method": "email"})
+    forget_profile(uid)
+    log(None, "mfa_enabled:email", uid)
+    token, exp = mfa.issue_token(uid, _decode(authorization).get("auth_time"))
+    return {"enabled": True, "recovery_codes": codes, "mfa_token": token, "expires_at": exp}
+
+
+@app.post("/api/auth/mfa/setup")
+def mfa_setup(user: dict = Depends(require(*MFA_ROLES))):
+    if user.get("mfa_enabled"):
+        raise HTTPException(400, "Two-factor sign-in is already on.")
+    secret = mfa.new_secret()
+    col("mfa").document(user["user_id"]).set({"pending_secret": secret, "pending_at": now()}, merge=True)
+    uri = mfa.otpauth_uri(secret, user.get("email") or user["user_id"])
+    return {"secret": secret, "otpauth_uri": uri, "qr_svg": mfa.qr_svg(uri)}
+
+
+@app.post("/api/auth/mfa/enable")
+def mfa_enable(body: MfaCode, authorization: Optional[str] = Header(None),
+               user: dict = Depends(require(*MFA_ROLES))):
+    uid = user["user_id"]
+    _mfa_attempt_guard(uid)
+    ref = col("mfa").document(uid)
+    pending = (ref.get().to_dict() or {}).get("pending_secret")
+    if not pending:
+        raise HTTPException(400, "Start two-factor setup again.")
+    if not mfa.check(pending, body.code):
+        _mfa_fail(uid)
+    codes = mfa.recovery_codes()
+    ref.set({"secret": pending, "pending_secret": None, "enabled_at": now(),
+             "recovery_hashes": [mfa.hash_code(c) for c in codes]})
+    col("users").document(uid).update({"mfa_enabled": True, "mfa_method": "app"})
+    forget_profile(uid)
+    log(None, "mfa_enabled", uid)
+    token, exp = mfa.issue_token(uid, _decode(authorization).get("auth_time"))
+    return {"enabled": True, "recovery_codes": codes, "mfa_token": token, "expires_at": exp}
+
+
+@app.post("/api/auth/mfa/disable")
+def mfa_disable(body: MfaCode, user: dict = Depends(require(*MFA_ROLES))):
+    uid = user["user_id"]
+    if not user.get("mfa_enabled"):
+        return {"enabled": False}
+    _mfa_attempt_guard(uid)
+    if not _check_mfa_code(uid, body.code)[0]:
+        _mfa_fail(uid)
+    col("mfa").document(uid).delete()
+    col("users").document(uid).update({"mfa_enabled": False})
+    forget_profile(uid)
+    log(None, "mfa_disabled", uid)
+    return {"enabled": False}
 
 
 @app.post("/api/auth/register")
@@ -331,7 +557,8 @@ def register(body: UserRegister, authorization: Optional[str] = Header(None)):
     if snap.exists:
         return doc_dict(snap, "user_id")
     profile = {"email": claims.get("email"), "full_name": body.full_name, "role": "clinician",
-               "hospital": body.hospital, "created_at": now(), "is_active": True}
+               "hospital": body.hospital, "created_at": now(), "is_active": True,
+               "language": body.language if body.language in LANGUAGES else "en"}
     ref.set(profile)
     forget_profile(claims["uid"])
     return {"user_id": claims["uid"], **profile}
@@ -344,11 +571,26 @@ def update_profile(update: ProfileUpdate, user: dict = Depends(current_user)):
         changes["full_name"] = update.full_name
     if update.hospital is not None:
         changes["hospital"] = update.hospital
+    if update.language is not None:
+        if update.language not in LANGUAGES:
+            raise HTTPException(400, "Language must be en, fr or rw.")
+        changes["language"] = update.language
+    if update.alert_email is not None:
+        changes["alert_email"] = update.alert_email
     if changes:
         col("users").document(user["user_id"]).update(changes)
         forget_profile(user["user_id"])
     merged = {**user, **changes}
-    return {"updated": True, "full_name": merged["full_name"], "hospital": merged.get("hospital")}
+    return {"updated": True, **{k: merged.get(k) for k in (
+        "full_name", "hospital", "language", "alert_email")}}
+
+
+@app.post("/api/users/me/test-alert")
+def test_alert(user: dict = Depends(current_user)):
+    if not (user.get("email") and user.get("alert_email", True)):
+        raise HTTPException(400, "Turn on email alerts first.")
+    result = alerts.send_now(user, "PneumoScan test alert", "This is a test of your PneumoScan referral alerts.")
+    return {"channels": ["email"], **alerts.status(), **result}
 
 
 @app.patch("/api/users/me/availability")
@@ -415,6 +657,13 @@ async def predict(file: UploadFile = File(...), patient_id: Optional[str] = None
     except Exception:
         raise HTTPException(400, "That file could not be read as an image.")
 
+    if patient_id:
+        psnap = col("patients").document(patient_id).get()
+        if not psnap.exists:
+            raise HTTPException(404, "Patient not found")
+        if not ((psnap.to_dict() or {}).get("consent") or {}).get("given"):
+            raise HTTPException(400, "No valid guardian consent is recorded for this patient. "
+                                     "Record consent on the patient page before analysing a radiograph.")
     signs = [x for x in (d.strip() for d in danger_signs.split(",")) if x in DANGER_SIGNS]
     clinical = {"respiratory_rate": respiratory_rate, "spo2": spo2,
                 "temperature_c": temperature_c, "danger_signs": signs}
@@ -424,6 +673,9 @@ async def predict(file: UploadFile = File(...), patient_id: Optional[str] = None
         "patient_id": patient_id, "filename": file.filename, "created_at": now(),
         "calibrated_prob": result.probability, "ood_score": result.ood_score,
         "triage_state": result.state, "model_version": result.model_version,
+        "model_sha256": engine.weights_sha256, "gate_sha256": engine.gate_sha256,
+        "thresholds": {k: v for k, v in (result.thresholds or {}).items()
+                       if isinstance(v, (int, float)) or v is None},
         "confirmed_outcome": None, "comment": None,
         "heatmap_png": result.heatmap_png, "image_png": to_stored_image(img),
         "user_id": user["user_id"], "clinical": clinical})
@@ -540,10 +792,12 @@ def case_detail(prediction_id: str, user: dict = Depends(current_user)):
         (get_many, "patients", [case.get("patient_id")], "patient_id"),
         (get_many, "users", [case.get("user_id")] + [e.get("assigned_to") for e in escs],
          "user_id"))
-    patient = pts.get(case.get("patient_id"))
+    patient = mask_patient(pts.get(case.get("patient_id")), user)
     case["clinician_name"] = users.get(case.get("user_id"), {}).get("full_name")
     for e in escs:
         e["specialist_name"] = users.get(e.get("assigned_to"), {}).get("full_name")
+        e["sla_minutes"] = sla_minutes(e.get("priority"))
+        e["overdue"] = e.get("status") == "sent" and _waiting_minutes(e) >= e["sla_minutes"]
     escs.sort(key=lambda e: e.get("created_at") or "", reverse=True)
     return {"case": case, "patient": patient, "escalations": escs}
 
@@ -566,15 +820,67 @@ def stats(user: dict = Depends(current_user)):
 
 
 # ------------------------------------------------------------------ patients
+def patient_label(pt: Optional[dict], user: dict) -> Optional[str]:
+    """Specialists see a study code instead of the name when the patient's identity is hidden."""
+    if not pt:
+        return None
+    if pt.get("hide_identity") and user["role"] == "specialist":
+        return f"Patient {pt.get('patient_id', '')}".strip()
+    return pt.get("full_name")
+
+
+def mask_patient(pt: Optional[dict], user: dict) -> Optional[dict]:
+    if not pt or not (pt.get("hide_identity") and user["role"] == "specialist"):
+        return pt
+    return {**{k: v for k, v in pt.items() if k not in ("guardian_name", "contact", "notes", "consent")},
+            "full_name": patient_label(pt, user), "identity_hidden": True}
+
+
+def _consent_record(given: bool, by, relationship, method, user: dict, reason=None) -> dict:
+    if given and not (by or "").strip():
+        raise HTTPException(400, "Enter the name of the parent or guardian giving consent.")
+    if given and method not in CONSENT_METHODS:
+        raise HTTPException(400, "Consent method must be verbal or written.")
+    return {"given": given, "by": (by or "").strip() or None, "relationship": relationship,
+            "method": method if given else None, "version": CONSENT_VERSION,
+            "recorded_by": user["user_id"], "recorded_at": now(),
+            "withdrawn_at": None if given else now(), "withdraw_reason": None if given else reason}
+
+
 @app.post("/api/patients")
 def create_patient(patient: PatientCreate, user: dict = Depends(require("clinician", "admin"))):
+    if not patient.consent_given:
+        raise HTTPException(400, "Guardian consent is required before registering a patient.")
+    consent = _consent_record(True, patient.consent_by or patient.guardian_name,
+                              patient.consent_relationship, patient.consent_method, user)
     patient_id = str(uuid.uuid4())[:8].upper()
     col("patients").document(patient_id).set({
         "full_name": patient.full_name, "age": patient.age, "gender": patient.gender,
         "notes": patient.notes, "guardian_name": patient.guardian_name,
-        "contact": patient.contact, "created_at": now(), "created_by": user["user_id"]})
+        "contact": patient.contact, "created_at": now(), "created_by": user["user_id"],
+        "consent": consent, "hide_identity": patient.hide_identity})
     log(None, f"patient_created:{patient_id}", user["user_id"])
-    return {"patient_id": patient_id, "message": "Patient created successfully"}
+    log(None, f"consent_recorded:{patient_id}", user["user_id"])
+    return {"patient_id": patient_id, "message": "Patient created successfully",
+            "consent": consent, "hide_identity": patient.hide_identity}
+
+
+@app.post("/api/patients/{patient_id}/consent")
+def update_consent(patient_id: str, body: ConsentUpdate,
+                   user: dict = Depends(require("clinician", "admin"))):
+    ref = col("patients").document(patient_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(404, "Patient not found")
+    old = (snap.to_dict() or {}).get("consent") or {}
+    if body.given:
+        consent = _consent_record(True, body.by, body.relationship, body.method, user)
+    else:
+        consent = {**old, "given": False, "withdrawn_at": now(), "withdraw_reason": body.reason,
+                   "withdrawn_by": user["user_id"]}
+    ref.update({"consent": consent})
+    log(None, f"consent_{'recorded' if body.given else 'withdrawn'}:{patient_id}", user["user_id"])
+    return {"consent": consent}
 
 
 @app.patch("/api/patients/{patient_id}")
@@ -597,7 +903,7 @@ def list_patients(user: dict = Depends(current_user)):
     """Specialists only see patients whose cases were sent to them."""
     if user["role"] == "specialist":
         ids = [e.get("patient_id") for e in _escalations_for("assigned_to", user["user_id"])]
-        patients = list(get_many("patients", ids, "patient_id").values())
+        patients = [mask_patient(p, user) for p in get_many("patients", ids, "patient_id").values()]
     else:
         patients = [doc_dict(s, "patient_id") for s in col("patients").stream()]
     scans: dict = {}
@@ -633,7 +939,8 @@ def get_patient(patient_id: str, user: dict = Depends(current_user)):
     for e in escs:
         s = specialists.get(e.get("assigned_to"))
         e["specialist_name"] = s["full_name"] if s else None
-    return {"patient": doc_dict(snap, "patient_id"), "predictions": preds, "escalations": escs}
+    return {"patient": mask_patient(doc_dict(snap, "patient_id"), user), "predictions": preds,
+            "escalations": escs}
 
 
 # ------------------------------------------------------------------ escalations
@@ -670,6 +977,11 @@ def create_escalation(esc: EscalationCreate, user: dict = Depends(require("clini
     log(esc.prediction_id, f"escalated_to:{sd['full_name']}", user["user_id"])
     notify(esc.specialist_id, ("Urgent referral" if esc.priority == "urgent" else "New referral"),
            f"{user['full_name']} sent you a case to review.", f"review/{escalation_id}")
+    if esc.priority == "urgent":
+        alerts.alert_user({**sd, "user_id": esc.specialist_id}, "PneumoScan: urgent referral",
+                          f"{user['full_name']} sent you an urgent chest X-ray referral ({escalation_id}). "
+                          f"Please open it in PneumoScan within {URGENT_SLA_MIN} minutes.",
+                          f"/specialist#/review/{escalation_id}")
     return {"escalation_id": escalation_id, "status": "sent", "priority": esc.priority,
             "assigned_to": esc.specialist_id, "specialist_name": sd["full_name"]}
 
@@ -692,7 +1004,167 @@ def start_escalation_review(escalation_id: str,
     if esc["status"] == "sent":
         ref.update({"status": "pending"})
         log(esc["prediction_id"], "specialist_review_started", user["user_id"])
+        notify(esc.get("created_by"), "Referral acknowledged",
+               f"{user['full_name']} has started reviewing your referral.",
+               f"case/{esc['prediction_id']}")
     return {"status": "pending"}
+
+
+def sla_minutes(priority: Optional[str]) -> int:
+    return URGENT_SLA_MIN if priority == "urgent" else ROUTINE_SLA_MIN
+
+
+def _waiting_minutes(e: dict) -> float:
+    h = hours_between(e.get("assigned_at") or e.get("created_at"), now())
+    return (h or 0) * 60
+
+
+@app.post("/api/escalations/{escalation_id}/reassign")
+def reassign_escalation(escalation_id: str, body: Reassign,
+                        user: dict = Depends(require("clinician", "admin"))):
+    ref = col("escalations").document(escalation_id)
+    snap = ref.get()
+    if not snap.exists:
+        raise HTTPException(404, "Escalation not found")
+    esc = snap.to_dict() or {}
+    if user["role"] == "clinician" and esc.get("created_by") != user["user_id"]:
+        raise HTTPException(403, "Only the referring clinician or an administrator can reassign.")
+    if esc.get("status") == "resolved":
+        raise HTTPException(400, "This referral has already been reviewed.")
+    if body.specialist_id == esc.get("assigned_to"):
+        raise HTTPException(400, "The case is already assigned to this specialist.")
+    spec = col("users").document(body.specialist_id).get()
+    sd = spec.to_dict() if spec.exists else None
+    if not sd or sd.get("role") != "specialist":
+        raise HTTPException(404, "Specialist not found")
+    if not sd.get("is_active", True) or not sd.get("available", True):
+        raise HTTPException(400, f"{sd['full_name']} is not available")
+    old = esc.get("assigned_to")
+    ref.update({"assigned_to": body.specialist_id, "status": "sent", "assigned_at": now(),
+                "reminded_at": None, "overdue_alerted_at": None,
+                "history": firestore.ArrayUnion([{"from": old, "to": body.specialist_id, "at": now(),
+                                                  "by": user["user_id"], "reason": body.reason or ""}])})
+    log(esc["prediction_id"], f"referral_reassigned_to:{sd['full_name']}", user["user_id"])
+    urgent = esc.get("priority") == "urgent"
+    notify(body.specialist_id, "Urgent referral" if urgent else "New referral",
+           f"{user['full_name']} reassigned a case to you.", f"review/{escalation_id}")
+    notify(old, "Referral reassigned", "A referral in your queue was reassigned to another specialist.", "queue")
+    if urgent:
+        alerts.alert_user({**sd, "user_id": body.specialist_id}, "PneumoScan: urgent referral",
+                          f"An urgent chest X-ray referral ({escalation_id}) was reassigned to you.",
+                          f"/specialist#/review/{escalation_id}")
+    return {"escalation_id": escalation_id, "assigned_to": body.specialist_id,
+            "specialist_name": sd["full_name"], "status": "sent"}
+
+
+def sweep_referrals() -> dict:
+    """Remind specialists about unopened referrals after the SLA and alert admins at twice the SLA."""
+    reminded = overdue = 0
+    admins = None
+    for snap in col("escalations").where(filter=FieldFilter("status", "==", "sent")).stream():
+        e = snap.to_dict() or {}
+        waited, sla = _waiting_minutes(e), sla_minutes(e.get("priority"))
+        urgent = e.get("priority") == "urgent"
+        label = "urgent" if urgent else "routine"
+        if waited >= sla and not e.get("reminded_at"):
+            snap.reference.update({"reminded_at": now()})
+            notify(e.get("assigned_to"), f"Reminder: {label} referral waiting",
+                   f"A {label} referral has waited {int(waited)} minutes without being opened.",
+                   f"review/{snap.id}")
+            notify(e.get("created_by"), "Referral not yet opened",
+                   f"Your {label} referral has not been opened after {int(waited)} minutes. "
+                   "You can reassign it to another specialist from the case page.",
+                   f"case/{e.get('prediction_id')}")
+            if urgent:
+                spec = col("users").document(e.get("assigned_to") or "-").get()
+                if spec.exists:
+                    alerts.alert_user({**spec.to_dict(), "user_id": spec.id},
+                                      "PneumoScan: urgent referral still waiting",
+                                      f"Urgent referral {snap.id} has waited {int(waited)} minutes.",
+                                      f"/specialist#/review/{snap.id}")
+            log(e.get("prediction_id"), "referral_reminder", None)
+            reminded += 1
+        if waited >= 2 * sla and not e.get("overdue_alerted_at"):
+            snap.reference.update({"overdue_alerted_at": now()})
+            if admins is None:
+                admins = [doc_dict(a, "user_id") for a in
+                          col("users").where(filter=FieldFilter("role", "==", "admin")).stream()]
+            for a in admins:
+                if a.get("is_active", True):
+                    notify(a["user_id"], f"Overdue {label} referral",
+                           f"Referral {snap.id} has not been opened after {int(waited)} minutes. "
+                           "Consider reassigning it.", "referrals")
+                    if urgent:
+                        alerts.alert_user(a, "PneumoScan: overdue urgent referral",
+                                          f"Urgent referral {snap.id} has waited {int(waited)} minutes.",
+                                          "/admin#/referrals")
+            log(e.get("prediction_id"), "referral_overdue", None)
+            overdue += 1
+    return {"reminded": reminded, "overdue": overdue}
+
+
+def _sweep_loop():
+    while True:
+        time.sleep(60)
+        try:
+            if firebase.configured():
+                sweep_referrals()
+        except Exception as e:
+            print(f"[referrals] sweep failed: {e}")
+
+
+@app.on_event("startup")
+def start_referral_sweeper():
+    if os.environ.get("REFERRAL_SWEEP", "1") != "0":
+        threading.Thread(target=_sweep_loop, daemon=True).start()
+
+
+@app.post("/api/admin/referrals/sweep")
+def run_sweep(user: dict = Depends(require("admin"))):
+    return sweep_referrals()
+
+
+@app.get("/api/admin/email-settings")
+def get_email_settings(user: dict = Depends(require("admin"))):
+    return alerts.public_settings()
+
+
+@app.put("/api/admin/email-settings")
+def put_email_settings(body: EmailSettings, user: dict = Depends(require("admin"))):
+    addr = body.user.strip()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", addr):
+        raise HTTPException(400, "Enter the full email address that sends the alerts.")
+    if body.port not in (25, 465, 587, 1025, 2525):
+        raise HTTPException(400, "Port must be 587 (STARTTLS) or 465 (SSL).")
+    changes = {"user": addr, "sender": (body.sender or "").strip(), "host": body.host.strip() or "smtp.gmail.com",
+               "port": body.port, "enabled": body.enabled, "updated_at": now(), "updated_by": user["user_id"]}
+    if body.password and body.password.strip():
+        changes["password"] = body.password.strip()
+    elif body.enabled and not alerts.stored_password_set():
+        raise HTTPException(400, "Enter the app password.")
+    alerts.save_settings(changes)
+    log(None, f"email_settings_updated:{addr}:{'on' if body.enabled else 'off'}", user["user_id"])
+    return alerts.public_settings()
+
+
+@app.post("/api/admin/email-settings/test")
+def test_email_settings(user: dict = Depends(require("admin"))):
+    if not alerts.email_configured():
+        raise HTTPException(400, "Save and turn on the email settings first.")
+    try:
+        alerts._send_email(user["email"], "PneumoScan test email",
+                           "Email alerts are working. Urgent referral alerts will be sent from this account.")
+    except Exception as e:
+        raise HTTPException(400, f"Could not send: {str(e)[:250]}")
+    log(None, "email_settings_tested", user["user_id"])
+    return {"sent": True, "to": user["email"]}
+
+
+@app.get("/api/admin/alerts")
+def alert_log(limit: int = 50, user: dict = Depends(require("admin"))):
+    q = col("alert_outbox").order_by("created_at", direction=Query.DESCENDING).limit(min(limit, 200))
+    return {"alerts": [doc_dict(s, "alert_id") for s in q.stream()], "providers": alerts.status(),
+            "sla": {"urgent_minutes": URGENT_SLA_MIN, "routine_minutes": ROUTINE_SLA_MIN}}
 
 
 @app.get("/api/escalations")
@@ -722,7 +1194,10 @@ def list_escalations(status: Optional[str] = None, images: bool = True,
         r["ai_label"] = ai_label(p)
         r.setdefault("priority", "routine")
         pt = patients.get(r.get("patient_id"), {})
-        r["patient_name"], r["age"], r["gender"] = pt.get("full_name"), pt.get("age"), pt.get("gender")
+        r["patient_name"], r["age"], r["gender"] = patient_label(pt, user), pt.get("age"), pt.get("gender")
+        r["identity_hidden"] = bool(pt.get("hide_identity")) and user["role"] == "specialist"
+        r["sla_minutes"] = sla_minutes(r.get("priority"))
+        r["overdue"] = r.get("status") == "sent" and _waiting_minutes(r) >= r["sla_minutes"]
         r["clinician_name"] = users.get(r.get("created_by"), {}).get("full_name")
         r["specialist_name"] = users.get(r.get("assigned_to"), {}).get("full_name")
     rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
@@ -794,7 +1269,7 @@ def conversations(user: dict = Depends(require("clinician", "specialist"))):
         pt = patients.get(r.get("patient_id"), {})
         other = users.get(r.get(other_field), {})
         out.append({"escalation_id": r["escalation_id"], "prediction_id": r.get("prediction_id"),
-                    "patient_name": pt.get("full_name"), "status": r.get("status"),
+                    "patient_name": patient_label(pt, user), "status": r.get("status"),
                     "priority": r.get("priority", "routine"),
                     "triage_state": preds.get(r.get("prediction_id"), {}).get("triage_state"),
                     "other_name": other.get("full_name"), "other_role": other.get("role"),
@@ -901,6 +1376,9 @@ def update_user(uid: str, data: AdminUserUpdate, user: dict = Depends(require("a
     if not snap.exists:
         raise HTTPException(404, "User not found")
     changes = data.model_dump(exclude_none=True)
+    if changes.pop("reset_mfa", False):
+        col("mfa").document(uid).delete()
+        changes["mfa_enabled"] = False
     if "role" in changes and changes["role"] not in ROLES:
         raise HTTPException(400, "Role must be 'clinician', 'specialist' or 'admin'")
     if uid == user["user_id"] and (changes.get("role", "admin") != "admin"
@@ -940,6 +1418,22 @@ def announce(body: Announcement, user: dict = Depends(require("admin"))):
     return {"sent": n}
 
 
+CALIB_BINS = 5
+
+
+def _calibration_summary(calib: list, brier: list) -> dict:
+    n = sum(b[0] for b in calib)
+    bins = [{"lo": i / CALIB_BINS, "hi": (i + 1) / CALIB_BINS, "n": c,
+             "mean_predicted": s / c if c else None, "observed": y / c if c else None}
+            for i, (c, s, y) in enumerate(calib)]
+    ece = sum(abs(b["mean_predicted"] - b["observed"]) * b["n"] for b in bins if b["n"]) / n if n else None
+    return {"n": n, "bins": bins, "ece": ece, "brier": sum(brier) / n if n else None,
+            "min_cases": CALIB_MIN_CASES, "enough": n >= CALIB_MIN_CASES}
+
+
+CALIB_MIN_CASES = 20
+
+
 @app.get("/api/admin/monitoring")
 def monitoring(days: int = 14, user: dict = Depends(require("admin"))):
     """Live behaviour of the model compared with its held-out test results."""
@@ -950,7 +1444,9 @@ def monitoring(days: int = 14, user: dict = Depends(require("admin"))):
     hist = [0] * 10
     matrix = {a: {t: 0 for t in ("pneumonia", "normal")} for a in ("pneumonia", "normal")}
     counts = {s: 0 for s in STATES}
-    fields = ["triage_state", "created_at", "calibrated_prob", "confirmed_outcome"]
+    fields = ["triage_state", "created_at", "calibrated_prob", "confirmed_outcome", "model_version"]
+    calib = [[0, 0.0, 0] for _ in range(CALIB_BINS)]   # n, sum of p, n pneumonia
+    brier, versions = [], {}
     for snap in col("predictions").select(fields).stream():
         p = snap.to_dict() or {}
         st = p.get("triage_state")
@@ -964,6 +1460,14 @@ def monitoring(days: int = 14, user: dict = Depends(require("admin"))):
         label, truth = ai_label(p), p.get("confirmed_outcome")
         if label and truth in ("pneumonia", "normal"):
             matrix[label][truth] += 1
+        if p.get("model_version"):
+            versions[p["model_version"]] = versions.get(p["model_version"], 0) + 1
+        prob = p.get("calibrated_prob")
+        if prob is not None and st != "REJECTED" and truth in ("pneumonia", "normal"):
+            y = 1 if truth == "pneumonia" else 0
+            b = calib[min(int(prob * CALIB_BINS), CALIB_BINS - 1)]
+            b[0] += 1; b[1] += prob; b[2] += y
+            brier.append((prob - y) ** 2)
     confirmed = sum(sum(r.values()) for r in matrix.values())
     agree = matrix["pneumonia"]["pneumonia"] + matrix["normal"]["normal"]
 
@@ -997,6 +1501,8 @@ def monitoring(days: int = 14, user: dict = Depends(require("admin"))):
                      if n_test and "rejected_out_of_distribution" in test else None},
         "daily": [{"date": d, **v} for d, v in daily.items()],
         "probability_histogram": hist,
+        "calibration": _calibration_summary(calib, brier),
+        "model_versions": versions, "current_model_version": engine.version,
         "agreement": {"confirmed": confirmed, "agree": agree,
                       "rate": agree / confirmed if confirmed else None, "matrix": matrix},
         "referrals": {"open_by_priority": open_by_priority, "resolved": len(turnaround),
@@ -1035,7 +1541,7 @@ def generate_report_endpoint(prediction_id: str, user: dict = Depends(current_us
     if data.get("patient_id"):
         patient = col("patients").document(data["patient_id"]).get()
         if patient.exists:
-            data["patient_name"] = patient.to_dict().get("full_name")
+            data["patient_name"] = patient_label({**patient.to_dict(), "patient_id": patient.id}, user)
     try:
         buffer = generate_report(data)
     except Exception as e:

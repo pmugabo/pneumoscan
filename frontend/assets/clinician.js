@@ -30,7 +30,7 @@ async function clDashboard() {
   const decided = n('CLEARED') + n('FLAGGED_URGENT');
   setCount('referrals', open.length);
   const greeting = new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 18 ? 'Good afternoon' : 'Good evening';
-  return `${intro(`${greeting}, ${esc((ME.full_name || '').split(' ').slice(0, 2).join(' '))}`, 'Here is your triage activity at a glance.',
+  return `${intro(`${tr(greeting)}, ${esc((ME.full_name || '').split(' ').slice(0, 2).join(' '))}`, tr('Here is your triage activity at a glance.'),
       `<div class="row"><a class="btn secondary" href="#/patients">${icon('users')}Patients</a><a class="btn" href="#/scan">${icon('scan')}New scan</a></div>`)}
     <div class="grid g4" style="margin-bottom:18px">
       ${statCard('scan', cases.filter(x => new Date(x.created_at).toDateString() === today).length, 'Scans today', '', `${cases.length} in total`)}
@@ -66,7 +66,7 @@ async function clScan(preselect) {
         <button class="btn sm secondary" onclick="clNewPatient(p => { clPatientsCache.unshift(p); go('#/scan/' + p.patient_id); })">${icon('plus', 15)}New patient</button></div>
       <div class="card-b"><select class="input" id="scanPatient"><option value="">Select a patient…</option>
         ${clPatientsCache.map(p => `<option value="${esc(p.patient_id)}" ${p.patient_id === preselect ? 'selected' : ''}>${esc(p.full_name)} · ${esc(p.patient_id)}${p.age != null ? ` · ${esc(p.age)} y` : ''}</option>`).join('')}</select>
-        ${clPatientsCache.length ? '' : '<p class="small muted" style="margin-top:8px">No patients yet. Create one to continue.</p>'}</div>
+        ${clPatientsCache.length ? '' : '<p class="small muted" style="margin-top:8px">No patients yet. Create one to continue.</p>'}<div id="scanConsent"></div></div>
       <div class="card-h" style="border-top:1px solid var(--border)"><span class="step-n">2</span><h3>Clinical signs</h3><span class="sub">optional, shared with the specialist</span></div>
       <div class="card-b stack"><div class="vitals">
           <div class="field"><label>Resp. rate (/min)</label><input class="input" id="vRR" type="number" min="5" max="120" placeholder="e.g. 48"></div>
@@ -85,8 +85,16 @@ async function clScan(preselect) {
       <div class="card-b" id="scanResult">${emptyState('image', 'Awaiting radiograph', 'The decision, heatmap and confidence will appear here.')}</div></div>
   </div>`;
 }
+function clConsentHint() {
+  const p = clPatientsCache.find(x => x.patient_id === $('scanPatient').value);
+  const ok = !p || (p.consent && p.consent.given);
+  $('scanConsent').innerHTML = ok ? '' : `<div class="form-error" style="margin-top:10px">No valid guardian consent is recorded for this patient.
+    <a href="#/patient/${esc(p.patient_id)}" style="font-weight:700">Record consent</a> before analysing a radiograph.</div>`;
+  return ok;
+}
 function clScanAfter() {
   const drop = $('drop'), input = $('scanFile');
+  $('scanPatient').onchange = clConsentHint; clConsentHint();
   const pick = f => {
     if (!/^image\/(png|jpeg)$/.test(f.type)) return toast('Please choose a PNG or JPEG image', 'error');
     clFile = f;
@@ -101,6 +109,7 @@ function clScanAfter() {
   $('scanRun').onclick = async () => {
     const pid = $('scanPatient').value;
     if (!pid) return toast('Select or create a patient first', 'error');
+    if (!clConsentHint()) return toast('Record guardian consent for this patient first', 'error');
     if (!clFile) return;
     const body = new FormData(); body.append('file', clFile);
     const num = id => $(id).value.trim();
@@ -112,10 +121,12 @@ function clScanAfter() {
     await withBusy($('scanRun'), 'Analysing…', async () => {
       try {
         const d = await apiJSON(`/api/predict?patient_id=${encodeURIComponent(pid)}`, {method: 'POST', body});
+        if (!$('scanResult')) return toast('Scan saved. Open it from Scan history.', 'success');
         $('scanResult').innerHTML = clResult({prediction_id: d.prediction_id, triage_state: d.state, calibrated_prob: d.probability,
           ood_score: d.ood_score, reason: d.reason, heatmap_png: d.heatmap_png, model_version: d.model_version, gate: d.thresholds.confidence,
           demo: d.demo_mode, clinical: d.clinical, age: (clPatientsCache.find(p => p.patient_id === pid) || {}).age}, URL.createObjectURL(clFile));
       } catch (e) {
+        if (!$('scanResult')) return toast('Analysis failed: ' + e.message, 'error');
         $('scanResult').innerHTML = emptyState('alert', 'Analysis failed', esc(e.message));
       }
     });
@@ -135,9 +146,10 @@ function clResult(d, original, escalations = []) {
     <div class="kv"><div><div class="k">P(pneumonia)</div><div class="v">${d.calibrated_prob != null ? d.calibrated_prob.toFixed(3) : '—'}</div></div>
       <div><div class="k">Model leaning</div><div class="v">${d.calibrated_prob == null ? '—' : d.calibrated_prob >= .5 ? 'Pneumonia' : 'Normal'}</div></div>
       <div><div class="k">OOD distance</div><div class="v">${d.ood_score != null ? Number(d.ood_score).toFixed(0) : '—'}</div></div>
-      <div><div class="k">Model</div><div class="v" style="font-size:13px">${esc(d.model_version || '—')}</div></div></div>
+      <div><div class="k">Model</div><div class="v mono" style="font-size:12px;overflow-wrap:anywhere;word-break:break-all">${esc(d.model_version || '—')}</div></div></div>
     ${d.calibrated_prob != null && gateConf(d.calibrated_prob) ? confidenceMeter(confOf(d.calibrated_prob), gateConf(d.calibrated_prob)) : ''}
     <div id="dx-${esc(d.prediction_id)}">${clOutcomeSummary(d, escalations)}</div>
+    ${disclaimerBox()}
     <div class="row wrap" style="padding-top:6px;border-top:1px solid var(--border)">
       ${referred ? `<span class="badge b-info">Referred to ${esc(escalations[0].specialist_name || 'specialist')}</span>` : ''}
       <span class="spacer"></span>
@@ -262,29 +274,42 @@ async function clRefer(pid, urgent) {
 }
 
 /* ---------- patients ---------- */
-function clPatientForm(p = {}) {
+function clPatientForm(p = {}, isNew = false) {
+  const privacy = `<label class="check-row"><input type="checkbox" id="ptHide" ${p.hide_identity !== false ? 'checked' : ''}>
+      <span><b>Hide identity from specialists</b><span class="small muted">Specialists see the study code (e.g. Patient ${esc(p.patient_id || 'AB12CD34')}) instead of the name, guardian and contact.</span></span></label>`;
+  const consent = isNew ? `<div class="consent-box"><div class="label" style="margin-bottom:8px">${icon('shield', 14)} Guardian consent</div>
+      <label class="check-row"><input type="checkbox" id="ptConsent"><span><b>The parent or guardian agreed to the child's data and X-ray being stored and analysed by this research prototype *</b>
+        <span class="small muted">Explain that PneumoScan is a research tool, what is stored, and that they can withdraw at any time.</span></span></label>
+      <div class="grid g2" style="gap:12px;margin-top:10px"><div class="field"><label>Relationship</label><select class="input" id="ptRel">
+          ${['mother', 'father', 'guardian', 'other'].map(r => `<option value="${r}">${r[0].toUpperCase() + r.slice(1)}</option>`).join('')}</select></div>
+        <div class="field"><label>Consent method</label><select class="input" id="ptMethod"><option value="verbal">Verbal</option><option value="written">Written</option></select></div></div></div>` : '';
   return `<div class="field"><label>Full name *</label><input class="input" id="ptName" value="${esc(p.full_name || '')}" required></div>
     <div class="grid g2" style="gap:12px"><div class="field"><label>Age (years)</label><input class="input" id="ptAge" type="number" min="0" max="18" value="${esc(p.age ?? '')}"></div>
       <div class="field"><label>Sex</label><select class="input" id="ptSex"><option value="">—</option>${['F', 'M'].map(g => `<option ${p.gender === g ? 'selected' : ''} value="${g}">${g === 'F' ? 'Female' : 'Male'}</option>`).join('')}</select></div></div>
     <div class="grid g2" style="gap:12px"><div class="field"><label>Parent / guardian</label><input class="input" id="ptGuard" value="${esc(p.guardian_name || '')}"></div>
       <div class="field"><label>Contact phone</label><input class="input" id="ptContact" value="${esc(p.contact || '')}"></div></div>
-    <div class="field"><label>Clinical notes</label><textarea class="input" id="ptNotes" placeholder="Presenting complaint, vitals…">${esc(p.notes || '')}</textarea></div>`;
+    <div class="field"><label>Clinical notes</label><textarea class="input" id="ptNotes" placeholder="Presenting complaint, vitals…">${esc(p.notes || '')}</textarea></div>
+    ${privacy}${consent}`;
 }
 function clReadPatient(m) {
   const age = m.q('#ptAge').value;
   return {full_name: m.q('#ptName').value.trim(), age: age === '' ? null : Number(age), gender: m.q('#ptSex').value || null,
-          guardian_name: m.q('#ptGuard').value.trim() || null, contact: m.q('#ptContact').value.trim() || null, notes: m.q('#ptNotes').value.trim()};
+          guardian_name: m.q('#ptGuard').value.trim() || null, contact: m.q('#ptContact').value.trim() || null, notes: m.q('#ptNotes').value.trim(),
+          hide_identity: m.q('#ptHide').checked};
 }
 function clNewPatient(done) {
-  const m = openModal({title: 'Register patient', body: clPatientForm(),
+  const m = openModal({title: 'Register patient', body: clPatientForm({}, true),
     footer: `<button class="btn secondary" data-close>Cancel</button><button class="btn" id="ptSave">Register patient</button>`});
   m.q('#ptSave').onclick = () => withBusy(m.q('#ptSave'), 'Saving…', async () => {
     const body = clReadPatient(m);
     if (!body.full_name) return toast('Patient name is required', 'error');
+    if (!m.q('#ptConsent').checked) return toast('Guardian consent is required to register a patient', 'error');
+    if (!body.guardian_name) return toast('Enter the parent or guardian who gave consent', 'error');
+    Object.assign(body, {consent_given: true, consent_by: body.guardian_name, consent_relationship: m.q('#ptRel').value, consent_method: m.q('#ptMethod').value});
     try {
       const r = await apiJSON('/api/patients', {method: 'POST', json: body});
       m.close(); toast(`Patient ${r.patient_id} registered`, 'success');
-      done({...body, patient_id: r.patient_id, scan_count: 0});
+      done({...body, patient_id: r.patient_id, scan_count: 0, consent: r.consent});
     } catch (e) { toast(e.message, 'error'); }
   });
 }
@@ -328,11 +353,54 @@ async function clPatient(id) {
         <div><div class="label">Contact</div>${esc(p.contact || '—')}</div>
         <div><div class="label">Clinical notes</div>${esc(p.notes || '—')}</div>
         <div><div class="label">Registered</div>${fmtDate(p.created_at)}</div></div>`)}
+      ${card('Consent & privacy', `<div class="stack small">
+        <div class="row">${consentBadge(p)}${p.hide_identity ? '<span class="badge b-accent plain">Identity hidden from specialists</span>' : ''}</div>
+        ${p.consent && p.consent.given ? `<div class="muted">Given by ${esc(p.consent.by || '—')}${p.consent.relationship ? ' (' + esc(p.consent.relationship) + ')' : ''} · ${esc(p.consent.method || '')} · ${fmtDate(p.consent.recorded_at)}<br>Consent form version ${esc(p.consent.version || '—')}</div>`
+          : p.consent && p.consent.withdrawn_at ? `<div class="muted">Withdrawn ${fmtDate(p.consent.withdrawn_at)}${p.consent.withdraw_reason ? ' · ' + esc(p.consent.withdraw_reason) : ''}. New scans are blocked.</div>`
+          : '<div class="muted">This patient was registered before consent was recorded. Record consent before the next scan.</div>'}
+        <div class="row"><span class="spacer"></span>${p.consent && p.consent.given
+          ? `<button class="btn sm secondary" onclick="clConsent('${esc(p.patient_id)}', false)">Withdraw consent</button>`
+          : `<button class="btn sm" onclick="clConsent('${esc(p.patient_id)}', true, '${esc(p.guardian_name || '')}')">${icon('shield', 14)}Record consent</button>`}</div></div>`)}
       ${card('Specialist referrals', d.escalations.length ? d.escalations.map(e => `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
         <div class="row">${escBadge(e.status)}${priorityBadge(e.priority)}<span class="spacer"></span>${outcomeBadge(e.confirmed_outcome)}</div>
         <div class="small muted" style="margin-top:4px">${esc(e.specialist_name || '')} · sent ${ago(e.created_at)}</div>
         ${e.specialist_comment ? `<div class="small" style="margin-top:4px">"${esc(e.specialist_comment)}"</div>` : ''}</div>`).join('') : '<p class="muted small">No referrals for this patient.</p>')}
     </div></div>`;
+}
+function clConsent(pid, give, guardian = '') {
+  const m = openModal({title: give ? 'Record guardian consent' : 'Withdraw consent', body: give ? `
+      <p class="muted" style="margin-bottom:12px">Confirm the parent or guardian agreed to the child's data and X-rays being stored and analysed by this research prototype.</p>
+      <div class="field"><label>Parent / guardian name *</label><input class="input" id="csBy" value="${esc(guardian)}"></div>
+      <div class="grid g2" style="gap:12px"><div class="field"><label>Relationship</label><select class="input" id="csRel">${['mother', 'father', 'guardian', 'other'].map(r => `<option value="${r}">${r[0].toUpperCase() + r.slice(1)}</option>`).join('')}</select></div>
+        <div class="field"><label>Consent method</label><select class="input" id="csMethod"><option value="verbal">Verbal</option><option value="written">Written</option></select></div></div>`
+    : `<p class="muted" style="margin-bottom:12px">No new radiographs can be analysed for this patient after withdrawal. Existing records are kept for the audit trail unless your administrator deletes them.</p>
+      <div class="field"><label>Reason (optional)</label><input class="input" id="csReason"></div>`,
+    footer: `<button class="btn secondary" data-close>Cancel</button><button class="btn ${give ? '' : 'danger'}" id="csSave">${give ? 'Record consent' : 'Withdraw consent'}</button>`});
+  m.q('#csSave').onclick = () => withBusy(m.q('#csSave'), 'Saving…', async () => {
+    const body = give ? {given: true, by: m.q('#csBy').value.trim(), relationship: m.q('#csRel').value, method: m.q('#csMethod').value}
+      : {given: false, reason: m.q('#csReason').value.trim() || null};
+    if (give && !body.by) return toast('Enter the parent or guardian name', 'error');
+    try { await apiJSON(`/api/patients/${encodeURIComponent(pid)}/consent`, {method: 'POST', json: body}); m.close();
+      toast(give ? 'Consent recorded' : 'Consent withdrawn', 'success'); route(); }
+    catch (e) { toast(e.message, 'error'); }
+  });
+}
+async function clReassign(escId, currentId, pid) {
+  let specs = [];
+  try { specs = (await apiJSON('/api/specialists')).specialists.filter(s => s.available && s.user_id !== currentId); } catch (e) { return toast(e.message, 'error'); }
+  const m = openModal({title: 'Reassign referral', body: specs.length ? `
+      <p class="muted" style="margin-bottom:12px">The case moves to the new specialist's queue and the conversation thread goes with it.</p>
+      <div class="field"><label>New specialist</label><select class="input" id="raSpec">${specs.map(s => `<option value="${esc(s.user_id)}">${esc(s.full_name)}${s.hospital ? ' · ' + esc(s.hospital) : ''}</option>`).join('')}</select></div>
+      <div class="field"><label>Reason</label><input class="input" id="raReason" placeholder="e.g. Not opened within 30 minutes"></div>`
+      : emptyState('users', 'No other specialist available', 'Ask your administrator to make another specialist available.'),
+    footer: specs.length ? `<button class="btn secondary" data-close>Cancel</button><button class="btn" id="raSave">${icon('send', 16)}Reassign</button>` : ''});
+  if (!specs.length) return;
+  m.q('#raSave').onclick = () => withBusy(m.q('#raSave'), 'Reassigning…', async () => {
+    try {
+      const r = await apiJSON(`/api/escalations/${encodeURIComponent(escId)}/reassign`, {method: 'POST', json: {specialist_id: m.q('#raSpec').value, reason: m.q('#raReason').value.trim()}});
+      m.close(); toast(`Reassigned to ${r.specialist_name}`, 'success'); pid ? go('#/case/' + pid) : route();
+    } catch (e) { toast(e.message, 'error'); }
+  });
 }
 function clEditPatient(p) {
   const m = openModal({title: 'Edit patient', body: clPatientForm(p),
@@ -390,7 +458,7 @@ function clFilterReferrals() {
   const rows = clRefs.filter(r => clRefTab === 'all' || (clRefTab === 'open' ? r.status !== 'resolved' : r.status === 'resolved'));
   $('rfTable').innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Patient</th><th>Specialist</th><th>Priority</th><th>Sent</th><th>Status</th><th>Diagnosis</th><th>Waiting / turnaround</th></tr></thead><tbody>
     ${rows.map(r => `<tr class="click" onclick="go('#/case/${esc(r.prediction_id)}')"><td><b>${esc(r.patient_name || 'Unknown')}</b><div class="small muted">${stateBadge(r.triage_state)}</div></td>
-      <td>${esc(r.specialist_name || '—')}</td><td>${priorityBadge(r.priority)}</td><td class="small">${fmtDate(r.created_at)}</td><td>${escBadge(r.status)}</td>
+      <td>${esc(r.specialist_name || '—')}</td><td><div class="row" style="gap:6px">${priorityBadge(r.priority)}${overdueBadge(r)}</div></td><td class="small">${fmtDate(r.created_at)}</td><td>${escBadge(r.status)}</td>
       <td>${outcomeBadge(r.confirmed_outcome)}</td><td>${r.status === 'resolved' ? duration((new Date(r.resolved_at) - new Date(r.created_at)) / 36e5) : waitLabel(r.created_at)}</td></tr>`).join('')}</tbody></table></div>`
     : emptyState('send', 'Nothing here', clRefTab === 'open' ? 'No referrals are waiting for a specialist.' : 'No referrals yet.');
 }
@@ -407,7 +475,7 @@ async function clCase(id) {
     <div class="stack">
       ${card('Specialist review', d.escalations.length ? d.escalations.map(e => `<div class="stack">
           <div class="row"><div class="avatar">${initials(e.specialist_name)}</div><div style="flex:1"><b>${esc(e.specialist_name || 'Specialist')}</b>
-            <div class="small muted">Sent ${fmtDate(e.created_at)}</div></div>${priorityBadge(e.priority)}${escBadge(e.status)}</div>
+            <div class="small muted">Sent ${fmtDate(e.created_at)}</div></div>${overdueBadge(e)}${priorityBadge(e.priority)}${escBadge(e.status)}</div>
           ${e.note ? `<div><div class="label">Your note</div><p>${esc(e.note)}</p></div>` : ''}
           ${e.status === 'resolved' ? `<div class="kv"><div><div class="k">Diagnosis</div><div class="v">${esc(e.confirmed_outcome || '—')}</div></div>
               <div><div class="k">Turnaround</div><div class="v">${duration((new Date(e.resolved_at) - new Date(e.created_at)) / 36e5)}</div></div>
@@ -415,7 +483,8 @@ async function clCase(id) {
             ${e.findings ? `<div><div class="label">Findings</div><p>${esc(e.findings)}</p></div>` : ''}
             ${e.recommendation ? `<div><div class="label">Recommendation</div><p>${esc(e.recommendation)}</p></div>` : ''}
             ${e.specialist_comment ? `<div><div class="label">Comment</div><p>${esc(e.specialist_comment)}</p></div>` : ''}`
-          : `<div class="form-note">Waiting for the specialist (${duration(hoursSince(e.created_at))} so far). You will be notified when they respond.</div>`}</div>`).join('<hr style="border:0;border-top:1px solid var(--border);margin:16px 0">')
+          : `<div class="${e.overdue ? 'form-error' : 'form-note'}">${e.overdue ? `Not opened within ${duration(e.sla_minutes / 60)}. ` : ''}Waiting for the specialist (${duration(hoursSince(e.assigned_at || e.created_at))} so far). You will be notified when they respond.</div>
+            <div class="row"><span class="spacer"></span><button class="btn sm ${e.overdue ? '' : 'secondary'}" onclick="clReassign('${esc(e.escalation_id)}', '${esc(e.assigned_to)}', '${esc(c.prediction_id)}')">${icon('refresh', 14)}Reassign</button></div>`}</div>`).join('<hr style="border:0;border-top:1px solid var(--border);margin:16px 0">')
         : `<p class="muted">This case has not been referred.</p>`)}
       ${d.escalations.length ? card(`Conversation with ${esc(d.escalations[0].specialist_name || 'specialist')}`, chatBox(d.escalations[0].escalation_id),
           {flush: true, action: `<a class="btn sm ghost" href="#/messages/${esc(d.escalations[0].escalation_id)}">${icon('chat', 15)}Full screen</a>`}) : ''}

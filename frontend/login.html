@@ -11,13 +11,15 @@
 <link rel="stylesheet" href="/static/assets/style.css?v=4">
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="/static/assets/core.js?v=4"></script>
+<script src="/static/assets/core.js?v=7"></script>
+<script src="/static/assets/i18n.js?v=7"></script>
 </head>
 <body>
 <div class="auth">
   <aside class="auth-art" id="art"></aside>
   <main class="auth-form">
     <div class="row" style="position:absolute;top:20px;right:24px">
+      <select class="lang-select" id="langSel" aria-label="Language"></select>
       <button class="icon-btn" id="themeBtn" title="Toggle light/dark mode" aria-label="Toggle theme"></button>
     </div>
     <div class="box">
@@ -59,6 +61,17 @@
         <p class="small muted">New accounts are clinician accounts. Specialist and administrator accounts are issued by your administrator.</p>
       </form>
 
+      <form id="mfa" class="stack hidden" style="margin-top:14px" novalidate autocomplete="off">
+        <div class="form-note">Two-factor sign-in is on for this account. Enter the 6-digit code from your authenticator app.</div>
+        <div class="field"><label for="mfaCode">Verification code</label>
+          <input class="input mfa-code" id="mfaCode" inputmode="numeric" autocomplete="one-time-code" maxlength="9" placeholder="123456"></div>
+        <button class="btn lg block" id="mfaBtn" type="submit">Verify and continue</button>
+        <button class="btn secondary block" id="mfaEmail" type="button">Email me a code</button>
+        <div id="mfaSent" class="small muted hidden" style="text-align:center"></div>
+        <p class="small muted">Lost your phone? Enter one of your recovery codes instead, or ask an administrator to reset two-factor sign-in.</p>
+        <p class="small" style="text-align:center"><a href="#" id="mfaCancel">Cancel and sign out</a></p>
+      </form>
+
       <div id="switches"></div>
     </div>
   </main>
@@ -96,7 +109,7 @@ $('art').innerHTML = `<div class="row" style="justify-content:space-between;gap:
     <a class="art-home" href="/">${icon('back', 16)}Back to home</a></div>
   <h2>${P.art[0]}</h2><p>${P.art[1]}</p>
   <ul>${P.points.map(p => `<li>${icon('tick')}<span>${p}</span></li>`).join('')}</ul>
-  <p class="small" style="opacity:.7;margin-top:0">Research prototype · decision support only · not a certified medical device</p>`;
+  <p class="small" style="opacity:.85;margin-top:0;line-height:1.5"><b>Disclaimer:</b> ${DISCLAIMER}</p>`;
 if (role !== 'clinician') $('modeSeg').classList.add('hidden');
 
 const sw = (ico, text, href, link) => `<div class="auth-switch"><span class="ico">${icon(ico)}</span>
@@ -106,6 +119,7 @@ $('switches').innerHTML = role === 'clinician'
     `<p class="small muted" style="margin-top:14px;text-align:center"><a href="/admin/login">Administrator access</a></p>`
   : sw('clipboard', 'Are you a clinician?', '/login', 'Clinician sign-in');
 
+mountLangSelect($('langSel'));
 const renderTheme = () => $('themeBtn').innerHTML = icon(isDark() ? 'sun' : 'moon');
 $('themeBtn').onclick = () => { toggleTheme(); renderTheme(); };
 renderTheme();
@@ -140,8 +154,43 @@ async function enter() {
     e.href = ROLE_LOGIN[me.role];
     throw e;
   }
+  if (me.mfa_required && !me.mfa_verified) return askCode(me);
   location.replace(ROLE_HOME[role]);
 }
+async function emailCode() {
+  showErr('');
+  await withBusy($('mfaEmail'), 'Sending…', async () => {
+    try {
+      const r = await apiJSON('/api/auth/mfa/email/send', {method: 'POST'});
+      $('mfaSent').textContent = `Code sent to ${r.sent_to}. It expires in 10 minutes.`;
+      $('mfaSent').classList.remove('hidden');
+    } catch (err) { showErr(err.message); }
+  });
+}
+$('mfaEmail').onclick = emailCode;
+function askCode(me = {}) {
+  if (me.mfa_email_available === false) $('mfaEmail').classList.add('hidden');
+  if (me.mfa_method === 'email') { $('mfa').querySelector('.form-note').textContent = 'Two-factor sign-in is on for this account. Enter the 6-digit code we email you.'; if (me.mfa_email_available !== false) setTimeout(emailCode, 100); }
+  ['signin', 'signup', 'modeSeg', 'switches'].forEach(id => $(id).classList.add('hidden'));
+  $('mfa').classList.remove('hidden');
+  $('title').textContent = 'Two-factor verification';
+  $('subtitle').textContent = 'One more step to protect patient data.';
+  setTimeout(() => $('mfaCode').focus(), 50);
+}
+$('mfa').onsubmit = async e => {
+  e.preventDefault();
+  const code = $('mfaCode').value.trim();
+  if (!code) return showErr('Enter the code from your authenticator app.');
+  showErr('');
+  await withBusy($('mfaBtn'), 'Verifying…', async () => {
+    try {
+      const r = await apiJSON('/api/auth/mfa/verify', {method: 'POST', json: {code}});
+      sessionStorage.setItem('ps-mfa', r.mfa_token);
+      location.replace(ROLE_HOME[role]);
+    } catch (err) { showErr(err.message); $('mfaCode').select(); }
+  });
+};
+$('mfaCancel').onclick = async e => { e.preventDefault(); await signOut(location.pathname); };
 authUser().then(u => { if (u && !working) enter().catch(() => fbAuth.signOut()); }).catch(() => {});
 
 $('signin').onsubmit = async e => {

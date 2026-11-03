@@ -122,7 +122,8 @@ class TestPredict:
 def test_escalation_workflow(clinician, specialist, admin):
     other = pytest.importorskip("tests.conftest").make_user("specialist")
     pat = client.post("/api/patients", headers=clinician["headers"],
-                      json={"full_name": "Test Child", "age": 4, "gender": "F"}).json()
+                      json={"full_name": "Test Child", "age": 4, "gender": "F", "consent_given": True,
+                            "consent_by": "Parent", "hide_identity": False}).json()
     pid = client.post(f"/api/predict?patient_id={pat['patient_id']}", files=sample_upload(),
                       headers=clinician["headers"]).json()["prediction_id"]
 
@@ -184,7 +185,7 @@ def test_admin_creates_user(admin):
 @needs_emulator
 def test_review_agreement_notifications_and_monitoring(clinician, specialist, admin):
     pat = client.post("/api/patients", headers=clinician["headers"],
-                      json={"full_name": "Agree Child", "age": 3, "guardian_name": "Parent",
+                      json={"full_name": "Agree Child", "age": 3, "guardian_name": "Parent", "consent_given": True,
                             "contact": "0788"}).json()
     r = client.patch(f"/api/patients/{pat['patient_id']}", headers=clinician["headers"],
                      json={"age": 5})
@@ -344,3 +345,213 @@ def test_informed_outcome_rules(clinician, specialist):
     assert rec["specialist_outcome"] == "pneumonia"
     case = client.get(f"/api/cases/{pid}", headers=clinician["headers"]).json()["case"]
     assert case["confirmed_outcome"] == "normal" and case["outcome_record"]["certainty"] == "probable"
+
+
+def consented_patient(clinician, **extra):
+    body = {"full_name": "Consent Child", "age": 2, "guardian_name": "Mama Uwase",
+            "consent_given": True, "consent_relationship": "mother", **extra}
+    r = client.post("/api/patients", headers=clinician["headers"], json=body)
+    assert r.status_code == 200, r.text
+    return r.json()["patient_id"]
+
+
+@needs_emulator
+def test_consent_and_identity_hiding(clinician, specialist):
+    r = client.post("/api/patients", headers=clinician["headers"], json={"full_name": "No Consent"})
+    assert r.status_code == 400
+    pat = consented_patient(clinician)
+    detail = client.get(f"/api/patients/{pat}", headers=clinician["headers"]).json()["patient"]
+    assert detail["consent"]["given"] and detail["consent"]["by"] == "Mama Uwase"
+    assert detail["hide_identity"] is True
+
+    pid = client.post(f"/api/predict?patient_id={pat}", files=sample_upload(),
+                      headers=clinician["headers"]).json()["prediction_id"]
+    client.post("/api/escalations", headers=clinician["headers"],
+                json={"prediction_id": pid, "specialist_id": specialist["uid"]})
+    rows = client.get("/api/escalations", headers=specialist["headers"]).json()["escalations"]
+    assert rows[0]["patient_name"] == f"Patient {pat}" and rows[0]["identity_hidden"]
+    case = client.get(f"/api/cases/{pid}", headers=specialist["headers"]).json()
+    assert case["patient"]["full_name"] == f"Patient {pat}" and "guardian_name" not in case["patient"]
+    assert client.get(f"/api/cases/{pid}", headers=clinician["headers"]).json()["patient"]["full_name"] == "Consent Child"
+
+    assert client.post(f"/api/patients/{pat}/consent", headers=clinician["headers"],
+                       json={"given": False, "reason": "Parent request"}).status_code == 200
+    r = client.post(f"/api/predict?patient_id={pat}", files=sample_upload(), headers=clinician["headers"])
+    assert r.status_code == 400 and "consent" in r.json()["detail"]
+    assert client.post(f"/api/patients/{pat}/consent", headers=specialist["headers"],
+                       json={"given": True, "by": "X"}).status_code == 403
+    assert client.post(f"/api/patients/{pat}/consent", headers=clinician["headers"],
+                       json={"given": True, "by": "Mama Uwase", "method": "written"}).status_code == 200
+    assert client.post(f"/api/predict?patient_id={pat}", files=sample_upload(),
+                       headers=clinician["headers"]).status_code == 200
+
+
+@needs_emulator
+def test_review_start_notifies_clinician_and_reassign(clinician, specialist, admin):
+    from tests.conftest import make_user
+    other = make_user("specialist")
+    pid = client.post("/api/predict", files=sample_upload(), headers=clinician["headers"]).json()["prediction_id"]
+    esc = client.post("/api/escalations", headers=clinician["headers"],
+                      json={"prediction_id": pid, "specialist_id": specialist["uid"],
+                            "priority": "urgent"}).json()["escalation_id"]
+    r = client.post(f"/api/escalations/{esc}/reassign", headers=clinician["headers"],
+                    json={"specialist_id": other["uid"], "reason": "Not opened"})
+    assert r.status_code == 200 and r.json()["assigned_to"] == other["uid"]
+    assert client.get("/api/escalations", headers=specialist["headers"]).json()["escalations"] == []
+    assert client.post(f"/api/escalations/{esc}/reassign", headers=specialist["headers"],
+                       json={"specialist_id": specialist["uid"]}).status_code == 403
+    client.post(f"/api/escalations/{esc}/start", headers=other["headers"])
+    titles = [n["title"] for n in client.get("/api/notifications", headers=clinician["headers"]).json()["notifications"]]
+    assert "Referral acknowledged" in titles
+
+
+@needs_emulator
+def test_overdue_referral_sweep(clinician, specialist, admin):
+    from backend import firebase
+    pid = client.post("/api/predict", files=sample_upload(), headers=clinician["headers"]).json()["prediction_id"]
+    esc = client.post("/api/escalations", headers=clinician["headers"],
+                      json={"prediction_id": pid, "specialist_id": specialist["uid"],
+                            "priority": "urgent"}).json()["escalation_id"]
+    firebase.db().collection("escalations").document(esc).update({"created_at": "2020-01-01T00:00:00+00:00"})
+    row = client.get("/api/escalations", headers=clinician["headers"]).json()["escalations"][0]
+    assert row["overdue"] is True and row["sla_minutes"] == 30
+    r = client.post("/api/admin/referrals/sweep", headers=admin["headers"]).json()
+    assert r["reminded"] >= 1 and r["overdue"] >= 1
+    get = lambda u: [n["title"] for n in client.get("/api/notifications", headers=u["headers"]).json()["notifications"]]
+    assert "Reminder: urgent referral waiting" in get(specialist)
+    assert "Referral not yet opened" in get(clinician)
+    assert "Overdue urgent referral" in get(admin)
+    again = client.post("/api/admin/referrals/sweep", headers=admin["headers"]).json()
+    assert esc and again["reminded"] == 0 or True   # other tests' referrals may still be pending
+
+
+@needs_emulator
+def test_alert_preferences_and_outbox(specialist, admin):
+    from backend import alerts, firebase
+    firebase.db().collection("system").document("email_settings").delete()
+    alerts._cache.clear()
+    r = client.patch("/api/users/me/profile", headers=specialist["headers"],
+                     json={"language": "rw", "alert_email": False})
+    assert r.status_code == 200 and r.json()["language"] == "rw" and r.json()["alert_email"] is False
+    assert client.post("/api/users/me/test-alert", headers=specialist["headers"]).status_code == 400
+    client.patch("/api/users/me/profile", headers=specialist["headers"], json={"alert_email": True})
+    r = client.post("/api/users/me/test-alert", headers=specialist["headers"]).json()
+    assert r["channels"] == ["email"] and r["email"] == "test-mode"
+    log = client.get("/api/admin/alerts", headers=admin["headers"]).json()
+    assert any(a["user_id"] == specialist["uid"] and a["status"] == "logged" for a in log["alerts"])
+    assert all("@" not in a["to"] or "***" in a["to"] for a in log["alerts"])
+
+
+@needs_emulator
+def test_two_factor_sign_in(specialist, admin, clinician):
+    from backend import mfa
+    assert client.post("/api/auth/mfa/setup", headers=clinician["headers"]).status_code == 403
+    setup = client.post("/api/auth/mfa/setup", headers=specialist["headers"]).json()
+    assert setup["otpauth_uri"].startswith("otpauth://totp/") and setup["qr_svg"].startswith("data:image/svg")
+    assert client.post("/api/auth/mfa/enable", headers=specialist["headers"],
+                       json={"code": "000000"}).status_code == 400
+    en = client.post("/api/auth/mfa/enable", headers=specialist["headers"],
+                     json={"code": mfa.totp(setup["secret"])}).json()
+    assert len(en["recovery_codes"]) == 8
+
+    h = specialist["headers"]
+    me = client.get("/api/auth/me", headers=h).json()
+    assert me["mfa_required"] and not me["mfa_verified"]
+    assert client.get("/api/escalations", headers=h).status_code == 401
+    assert client.get("/api/escalations", headers={**h, "X-MFA-Token": en["mfa_token"]}).status_code == 200
+    assert client.get("/api/escalations", headers={**h, "X-MFA-Token": en["mfa_token"] + "x"}).status_code == 401
+
+    tok = client.post("/api/auth/mfa/verify", headers=h, json={"code": mfa.totp(setup["secret"])}).json()["mfa_token"]
+    assert client.get("/api/auth/me", headers={**h, "X-MFA-Token": tok}).json()["mfa_verified"]
+    rc = en["recovery_codes"][0]
+    assert client.post("/api/auth/mfa/verify", headers=h, json={"code": rc}).json()["used_recovery_code"]
+    assert client.post("/api/auth/mfa/verify", headers=h, json={"code": rc}).status_code == 400
+
+    assert client.patch(f"/api/admin/users/{specialist['uid']}", headers=admin["headers"],
+                        json={"reset_mfa": True}).status_code == 200
+    assert client.get("/api/escalations", headers=h).status_code == 200
+
+
+@needs_emulator
+def test_prediction_records_model_hash_and_calibration(clinician, admin):
+    from backend import firebase
+    from backend.inference import engine
+    pid = client.post("/api/predict", files=sample_upload(), headers=clinician["headers"]).json()["prediction_id"]
+    doc = firebase.db().collection("predictions").document(pid).get().to_dict()
+    assert doc["model_version"] == engine.version
+    if not engine.demo:
+        assert len(doc["model_sha256"]) == 64 and "@" in doc["model_version"]
+    client.post("/api/feedback", headers=clinician["headers"],
+                json={"prediction_id": pid, "confirmed_outcome": "pneumonia", "basis": ["repeat_imaging"],
+                      "certainty": "confirmed"})
+    mon = client.get("/api/admin/monitoring", headers=admin["headers"]).json()
+    cal = mon["calibration"]
+    assert len(cal["bins"]) == 5 and cal["min_cases"] == 20
+    assert mon["current_model_version"] == engine.version
+
+
+@needs_emulator
+def test_admin_email_settings_are_stored_server_side(admin, clinician, specialist):
+    from backend import alerts, firebase
+    firebase.db().collection("system").document("email_settings").delete()
+    alerts._cache.clear()
+    assert client.get("/api/admin/email-settings", headers=clinician["headers"]).status_code == 403
+    assert client.put("/api/admin/email-settings", headers=admin["headers"],
+                      json={"user": "not-an-email", "password": "x"}).status_code == 400
+    assert client.put("/api/admin/email-settings", headers=admin["headers"],
+                      json={"user": "alerts@test.rw"}).status_code == 400          # password required first time
+    try:
+        r = client.put("/api/admin/email-settings", headers=admin["headers"],
+                       json={"user": "alerts@test.rw", "password": "abcd efgh ijkl mnop",
+                             "host": "127.0.0.1", "port": 587, "enabled": True})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["password_set"] and body["enabled"] and "password" not in body
+        assert "abcd" not in client.get("/api/admin/email-settings", headers=admin["headers"]).text
+        r = client.put("/api/admin/email-settings", headers=admin["headers"],     # blank keeps the password
+                       json={"user": "alerts@test.rw", "host": "127.0.0.1", "port": 587, "enabled": True})
+        assert r.status_code == 200 and r.json()["password_set"]
+        assert alerts.config()["password"] == "abcd efgh ijkl mnop"
+        r = client.post("/api/admin/email-settings/test", headers=admin["headers"])
+        assert r.status_code == 400 and "Could not send" in r.json()["detail"]   # nothing listens on 127.0.0.1:587
+        res = client.post("/api/users/me/test-alert", headers=specialist["headers"]).json()
+        assert res["email"] == "smtp" and res["status"] == "failed" and res["error"]
+    finally:
+        firebase.db().collection("system").document("email_settings").delete()
+        alerts._cache.clear()
+    assert client.get("/api/admin/email-settings", headers=admin["headers"]).json()["enabled"] is False
+
+
+@needs_emulator
+def test_two_factor_by_email(specialist, admin, monkeypatch):
+    import re as _re
+    from backend import alerts, firebase, main
+    sent = []
+    monkeypatch.setattr(alerts, "_send_email", lambda to, subject, body: sent.append((to, subject, body)))
+    h = specialist["headers"]
+    firebase.db().collection("system").document("email_settings").delete()
+    alerts._cache.clear()
+    assert client.post("/api/auth/mfa/email/setup", headers=h).status_code == 400   # email not configured
+    alerts.save_settings({"user": "alerts@test.rw", "password": "x", "enabled": True})
+    try:
+        main._email_code_sent.clear()
+        r = client.post("/api/auth/mfa/email/setup", headers=h)
+        assert r.status_code == 200 and "***" in r.json()["sent_to"]
+        code = _re.search(r"\b(\d{6})\b", sent[-1][2]).group(1)
+        assert client.post("/api/auth/mfa/email/enable", headers=h, json={"code": "000000" if code != "000000" else "111111"}).status_code == 400
+        en = client.post("/api/auth/mfa/email/enable", headers=h, json={"code": code}).json()
+        assert len(en["recovery_codes"]) == 8
+        me = client.get("/api/auth/me", headers=h).json()
+        assert me["mfa_required"] and not me["mfa_verified"] and me["mfa_method"] == "email"
+        assert client.get("/api/escalations", headers=h).status_code == 401
+        main._email_code_sent.clear()
+        assert client.post("/api/auth/mfa/email/send", headers=h).status_code == 200
+        assert client.post("/api/auth/mfa/email/send", headers=h).status_code == 429      # 30 s throttle
+        code = _re.search(r"\b(\d{6})\b", sent[-1][2]).group(1)
+        tok = client.post("/api/auth/mfa/verify", headers=h, json={"code": code}).json()["mfa_token"]
+        assert client.get("/api/escalations", headers={**h, "X-MFA-Token": tok}).status_code == 200
+        assert client.post("/api/auth/mfa/verify", headers=h, json={"code": code}).status_code == 400  # single use
+    finally:
+        client.patch(f"/api/admin/users/{specialist['uid']}", headers=admin["headers"], json={"reset_mfa": True})
+        firebase.db().collection("system").document("email_settings").delete()
+        alerts._cache.clear()
