@@ -53,11 +53,24 @@ class TestAuth:
         assert r.json()["user_id"] == clinician["uid"]
 
     def test_register_always_clinician(self):
+        from firebase_admin import auth
         from tests.conftest import make_user
         u = make_user("clinician")
         from backend import firebase
         firebase.db().collection("users").document(u["uid"]).delete()
         r = client.post("/api/auth/register", headers=u["headers"],
+                        json={"full_name": "Admin Wannabe", "hospital": "CHUK"})
+        assert r.status_code == 403                       # email not verified with a code
+        auth.update_user(u["uid"], email_verified=True)
+        u2 = make_user("clinician")
+        firebase.db().collection("users").document(u2["uid"]).delete()
+        auth.update_user(u2["uid"], email_verified=True)
+        import httpx, os
+        host = os.environ["FIREBASE_AUTH_EMULATOR_HOST"]
+        email = auth.get_user(u2["uid"]).email
+        tok = httpx.post(f"http://{host}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-key",
+                         json={"email": email, "password": "password123", "returnSecureToken": True}).json()["idToken"]
+        r = client.post("/api/auth/register", headers={"Authorization": f"Bearer {tok}"},
                         json={"full_name": "Admin Wannabe", "hospital": "CHUK"})
         assert r.status_code == 200 and r.json()["role"] == "clinician"
 
@@ -293,6 +306,9 @@ def test_chat_between_clinician_and_specialist(clinician, specialist, admin):
     thread = client.get(url, headers=specialist["headers"]).json()
     assert [m["text"] for m in thread["messages"]] == ["SpO2 dropping", "Please advise"]
     assert client.get("/api/conversations", headers=specialist["headers"]).json()["unread"] == 0
+    notes = client.get("/api/notifications", headers=specialist["headers"]).json()
+    assert notes["unread_messages"] == 0
+    assert all(n["read"] for n in notes["notifications"] if n["link"] == f"messages/{eid}")
     client.post(url, headers=specialist["headers"], json={"text": "Start antibiotics"})
     newer = client.get(url, params={"after": m1["created_at"]},
                        headers=clinician["headers"]).json()
@@ -555,3 +571,98 @@ def test_two_factor_by_email(specialist, admin, monkeypatch):
         client.patch(f"/api/admin/users/{specialist['uid']}", headers=admin["headers"], json={"reset_mfa": True})
         firebase.db().collection("system").document("email_settings").delete()
         alerts._cache.clear()
+
+
+@needs_emulator
+def test_signup_requires_emailed_code(admin, monkeypatch):
+    import re as _re
+    from backend import alerts, firebase, main
+    sent = []
+    monkeypatch.setattr(alerts, "_send_email", lambda to, subject, body: sent.append((to, subject, body)))
+    email = f"new-spec-{uuid.uuid4().hex[:6]}@test.rw"
+    firebase.db().collection("system").document("email_settings").delete()
+    alerts._cache.clear()
+    assert client.post("/api/auth/signup/start", json={"email": email, "role": "specialist"}).status_code == 400
+    alerts.save_settings({"user": "alerts@test.rw", "password": "x", "enabled": True})
+    try:
+        assert client.post("/api/auth/signup/start", json={"email": email, "role": "admin"}).status_code == 400
+        assert client.post("/api/auth/signup/start", json={"email": "bad", "role": "clinician"}).status_code == 400
+        r = client.post("/api/auth/signup/start", json={"email": email, "role": "specialist"})
+        assert r.status_code == 200 and sent[-1][0] == email
+        assert client.post("/api/auth/signup/start", json={"email": email, "role": "specialist"}).status_code == 429
+        code = _re.search(r"\b(\d{6})\b", sent[-1][2]).group(1)
+        body = {"email": email, "password": "password123", "full_name": "Dr New Spec", "role": "specialist"}
+        assert client.post("/api/auth/signup/complete", json={**body, "code": "000000" if code != "000000" else "111111"}).status_code == 400
+        assert client.post("/api/auth/signup/complete", json={**body, "role": "clinician", "code": code}).status_code == 400
+        r = client.post("/api/auth/signup/complete", json={**body, "code": code})
+        assert r.status_code == 200 and r.json()["role"] == "specialist"
+        prof = firebase.db().collection("users").document(r.json()["user_id"]).get().to_dict()
+        assert prof["role"] == "specialist" and prof["email"] == email
+        assert client.post("/api/auth/signup/complete", json={**body, "code": code}).status_code == 400   # single use
+        main._signup_sent.clear()
+        assert client.post("/api/auth/signup/start", json={"email": email, "role": "clinician"}).status_code == 409
+        notes = client.get("/api/notifications", headers=admin["headers"]).json()["notifications"]
+        assert any(n["title"] == "New specialist account" for n in notes)
+    finally:
+        firebase.db().collection("system").document("email_settings").delete()
+        alerts._cache.clear()
+
+
+@needs_emulator
+def test_password_reset_link_by_email(clinician, monkeypatch):
+    from firebase_admin import auth
+    from backend import alerts, firebase, main
+    sent = []
+    monkeypatch.setattr(alerts, "_send_email", lambda to, subject, body: sent.append((to, subject, body)))
+    email = auth.get_user(clinician["uid"]).email
+    firebase.db().collection("system").document("email_settings").delete()
+    alerts._cache.clear()
+    assert client.post("/api/auth/password-reset", json={"email": email}).json()["via"] == "firebase"
+    alerts.save_settings({"user": "alerts@test.rw", "password": "x", "enabled": True})
+    try:
+        main._reset_sent.clear()
+        assert client.post("/api/auth/password-reset", json={"email": "nobody-x@test.rw"}).json()["via"] == "smtp"
+        assert not sent                                    # unknown address: nothing sent, same reply
+        assert client.post("/api/auth/password-reset", json={"email": email}).json()["via"] == "smtp"
+        assert sent[-1][0] == email and "oobCode=" in sent[-1][2]
+        assert client.post("/api/auth/password-reset", json={"email": "nope"}).status_code == 400
+    finally:
+        firebase.db().collection("system").document("email_settings").delete()
+        alerts._cache.clear()
+
+
+def test_measurement_ranges_follow_entry_order():
+    from backend import measurements as M
+    assert M.check(24, {"weight_kg": 100, "height_cm": 86})[0]            # 2-year-old cannot weigh 100 kg
+    assert M.check(24, {"weight_kg": 12, "height_cm": 86}) == ([], [])
+    assert M.check(24, {"weight_kg": 7, "height_cm": 86})[1]               # possible (malnutrition): warning
+    assert M.check(24, {"weight_kg": 12})[0]                               # height must come first
+    assert M.check(None, {"height_cm": 86})[0]                             # age must come first
+    assert M.check(180, {"head_circumference_cm": 50, "height_cm": 160})[0]   # not measured at 15 y
+    assert M.check(216, {"height_cm": 175, "weight_kg": 70}) == ([], [])
+    tall, short = M.ranges(120, 150)["weight_kg"], M.ranges(120, 110)["weight_kg"]
+    assert tall[3] > short[3]                                              # weight limit follows height
+
+
+@needs_emulator
+def test_patient_measurement_safeguards(clinician):
+    base = {"full_name": "Growth Child", "gender": "M", "guardian_name": "Parent", "consent_given": True,
+            "consent_by": "Parent"}
+    h = clinician["headers"]
+    r = client.post("/api/patients", headers=h, json={**base, "age_months": 24, "height_cm": 86, "weight_kg": 100})
+    assert r.status_code == 400 and "not possible" in r.json()["detail"]
+    r = client.post("/api/patients", headers=h, json={**base, "age_months": 24, "height_cm": 86, "weight_kg": 7})
+    assert r.status_code == 400 and "reason" in r.json()["detail"]
+    r = client.post("/api/patients", headers=h, json={**base, "age_months": 24, "height_cm": 86, "weight_kg": 7,
+                                                      "measurement_note": "Severe acute malnutrition"})
+    assert r.status_code == 200
+    pid = r.json()["patient_id"]
+    p = client.get(f"/api/patients/{pid}", headers=h).json()["patient"]
+    assert p["age"] == 2 and p["age_months"] == 24 and p["weight_kg"] == 7 and p["measurement_note"]
+    assert client.patch(f"/api/patients/{pid}", headers=h, json={"weight_kg": 90}).status_code == 400
+    r = client.patch(f"/api/patients/{pid}", headers=h, json={"weight_kg": 12})
+    assert r.status_code == 200
+    p = client.get(f"/api/patients/{pid}", headers=h).json()["patient"]
+    assert p["weight_kg"] == 12 and p["measurement_note"] is None
+    r = client.post("/api/predict", files=sample_upload(), headers=h, data={"spo2": 140})
+    assert r.status_code == 400

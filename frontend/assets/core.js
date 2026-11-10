@@ -94,12 +94,13 @@ const ROLE_HOME = {clinician: '/clinician', specialist: '/specialist', admin: '/
 const ROLE_LOGIN = {clinician: '/login', specialist: '/specialist/login', admin: '/admin/login'};
 const ROLE_NAME = {clinician: 'Clinician', specialist: 'Specialist', admin: 'Administrator'};
 
+const uiLocale = () => ({fr: 'fr-FR', rw: 'rw-RW'})[localStorage.getItem('ps-lang')] || undefined;
 function fmtDate(iso, withTime = true) {
   if (!iso) return '—';
   const d = new Date(iso);
   if (isNaN(d)) return esc(iso);
-  return d.toLocaleDateString(undefined, {day: '2-digit', month: 'short', year: 'numeric'}) +
-    (withTime ? ' · ' + d.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'}) : '');
+  return d.toLocaleDateString(uiLocale(), {day: '2-digit', month: 'short', year: 'numeric'}) +
+    (withTime ? ' · ' + d.toLocaleTimeString(uiLocale(), {hour: '2-digit', minute: '2-digit'}) : '');
 }
 function hoursSince(iso) { return iso ? (Date.now() - new Date(iso).getTime()) / 36e5 : 0; }
 function ago(iso) {

@@ -1,0 +1,5 @@
+{
+  "densenet121.pt": "63cd29f2fc9e685fa0cbe0dccf911823d0389c25f10db7d7c27a204aee266fbe",
+  "gate_params.json": "5f0c58a64f26bfffc10c85d03f4a390e7aee2a2799705b38c5950d10a554df80",
+  "gate_stats.npz": "e3b9048e2b0898e4ef6d8e7298c74035a1394e9bc169ec7cf20c46a64c6bd801"
+}

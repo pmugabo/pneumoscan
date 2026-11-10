@@ -65,7 +65,7 @@ async function clScan(preselect) {
     <div class="card"><div class="card-h"><span class="step-n">1</span><h3>Patient</h3><span class="spacer"></span>
         <button class="btn sm secondary" onclick="clNewPatient(p => { clPatientsCache.unshift(p); go('#/scan/' + p.patient_id); })">${icon('plus', 15)}New patient</button></div>
       <div class="card-b"><select class="input" id="scanPatient"><option value="">Select a patient…</option>
-        ${clPatientsCache.map(p => `<option value="${esc(p.patient_id)}" ${p.patient_id === preselect ? 'selected' : ''}>${esc(p.full_name)} · ${esc(p.patient_id)}${p.age != null ? ` · ${esc(p.age)} y` : ''}</option>`).join('')}</select>
+        ${clPatientsCache.map(p => `<option value="${esc(p.patient_id)}" ${p.patient_id === preselect ? 'selected' : ''}>${esc(p.full_name)} · ${esc(p.patient_id)}${p.age != null ? ` · ${esc(ageText(p))}` : ''}</option>`).join('')}</select>
         ${clPatientsCache.length ? '' : '<p class="small muted" style="margin-top:8px">No patients yet. Create one to continue.</p>'}<div id="scanConsent"></div></div>
       <div class="card-h" style="border-top:1px solid var(--border)"><span class="step-n">2</span><h3>Clinical signs</h3><span class="sub">optional, shared with the specialist</span></div>
       <div class="card-b stack"><div class="vitals">
@@ -111,8 +111,12 @@ function clScanAfter() {
     if (!pid) return toast('Select or create a patient first', 'error');
     if (!clConsentHint()) return toast('Record guardian consent for this patient first', 'error');
     if (!clFile) return;
-    const body = new FormData(); body.append('file', clFile);
     const num = id => $(id).value.trim();
+    for (const [id, lo, hi, name] of [['vRR', 5, 150, 'Respiratory rate'], ['vSpO2', 50, 100, 'SpO₂'], ['vTemp', 30, 44, 'Temperature']]) {
+      if (num(id) && !(+num(id) >= lo && +num(id) <= hi)) { $(id).classList.add('bad'); return toast(`${tr(name)}: ${num(id)} ${tr('is not possible')} (${lo}–${hi})`, 'error'); }
+      $(id).classList.remove('bad');
+    }
+    const body = new FormData(); body.append('file', clFile);
     if (num('vRR')) body.append('respiratory_rate', Math.round(+num('vRR')));
     if (num('vSpO2')) body.append('spo2', Math.round(+num('vSpO2')));
     if (num('vTemp')) body.append('temperature_c', +num('vTemp'));
@@ -274,7 +278,11 @@ async function clRefer(pid, urgent) {
 }
 
 /* ---------- patients ---------- */
+const MEAS = [['height_cm', 'Length / height', 'cm', 'ptHeight', 0], ['weight_kg', 'Weight', 'kg', 'ptWeight', 1],
+  ['head_circumference_cm', 'Head circumference', 'cm', 'ptHead', 2], ['muac_cm', 'Mid-upper arm circumference (MUAC)', 'cm', 'ptMuac', 2]];
+const ageText = p => p.age_months != null && p.age_months < 24 ? `${p.age_months} mo` : p.age != null ? `${p.age} y` : '—';
 function clPatientForm(p = {}, isNew = false) {
+  const months = p.age_months ?? (p.age != null ? p.age * 12 : null);
   const privacy = `<label class="check-row"><input type="checkbox" id="ptHide" ${p.hide_identity !== false ? 'checked' : ''}>
       <span><b>Hide identity from specialists</b><span class="small muted">Specialists see the study code (e.g. Patient ${esc(p.patient_id || 'AB12CD34')}) instead of the name, guardian and contact.</span></span></label>`;
   const consent = isNew ? `<div class="consent-box"><div class="label" style="margin-bottom:8px">${icon('shield', 14)} Guardian consent</div>
@@ -283,26 +291,89 @@ function clPatientForm(p = {}, isNew = false) {
       <div class="grid g2" style="gap:12px;margin-top:10px"><div class="field"><label>Relationship</label><select class="input" id="ptRel">
           ${['mother', 'father', 'guardian', 'other'].map(r => `<option value="${r}">${r[0].toUpperCase() + r.slice(1)}</option>`).join('')}</select></div>
         <div class="field"><label>Consent method</label><select class="input" id="ptMethod"><option value="verbal">Verbal</option><option value="written">Written</option></select></div></div></div>` : '';
+  const val = v => v == null ? '' : esc(v);
   return `<div class="field"><label>Full name *</label><input class="input" id="ptName" value="${esc(p.full_name || '')}" required></div>
-    <div class="grid g2" style="gap:12px"><div class="field"><label>Age (years)</label><input class="input" id="ptAge" type="number" min="0" max="18" value="${esc(p.age ?? '')}"></div>
-      <div class="field"><label>Sex</label><select class="input" id="ptSex"><option value="">—</option>${['F', 'M'].map(g => `<option ${p.gender === g ? 'selected' : ''} value="${g}">${g === 'F' ? 'Female' : 'Male'}</option>`).join('')}</select></div></div>
+    <div class="grid g3 meas-age" style="gap:12px"><div class="field"><label>Age: years *</label><input class="input" id="ptAgeY" type="number" inputmode="numeric" min="0" max="18" step="1" placeholder="0–18" value="${months != null ? Math.floor(months / 12) : ''}"></div>
+      <div class="field"><label>Age: months</label><input class="input" id="ptAgeM" type="number" inputmode="numeric" min="0" max="11" step="1" placeholder="0–11" value="${months != null ? months % 12 : ''}"></div>
+      <div class="field"><label>Sex *</label><select class="input" id="ptSex"><option value="">—</option>${['F', 'M'].map(g => `<option ${p.gender === g ? 'selected' : ''} value="${g}">${g === 'F' ? 'Female' : 'Male'}</option>`).join('')}</select></div></div>
+    <div class="meas-box"><div class="row wrap" style="gap:6px"><span class="label">${icon('activity', 14)} Measurements</span><span class="small muted">Enter in order. Each value sets the allowed range for the next.</span></div>
+      <div class="grid g2" style="gap:12px;margin-top:10px">${MEAS.map(([k, label, unit, id]) => `<div class="field meas" id="f-${k}">
+        <label>${label} (${unit})${k === 'height_cm' || k === 'weight_kg' ? ' *' : ''}</label>
+        <input class="input" id="${id}" type="number" inputmode="decimal" step="0.1" min="0" value="${val(p[k])}">
+        <div class="meas-hint small" id="h-${k}"></div></div>`).join('')}</div>
+      <div id="ptMeasConfirm" class="meas-confirm hidden">
+        <label class="check-row"><input type="checkbox" id="ptMeasOk" ${p.measurement_note ? 'checked' : ''}><span><b>I re-measured the values marked in amber and they are correct</b>
+          <span class="small muted">Values outside the usual range are possible, for example in premature babies or severe malnutrition.</span></span></label>
+        <div class="field" style="margin-top:8px"><label>Reason *</label><input class="input" id="ptMeasNote" placeholder="e.g. born at 30 weeks, severe acute malnutrition" value="${esc(p.measurement_note || '')}"></div></div></div>
     <div class="grid g2" style="gap:12px"><div class="field"><label>Parent / guardian</label><input class="input" id="ptGuard" value="${esc(p.guardian_name || '')}"></div>
       <div class="field"><label>Contact phone</label><input class="input" id="ptContact" value="${esc(p.contact || '')}"></div></div>
     <div class="field"><label>Clinical notes</label><textarea class="input" id="ptNotes" placeholder="Presenting complaint, vitals…">${esc(p.notes || '')}</textarea></div>
     ${privacy}${consent}`;
 }
+/* Validates age, then each measurement against limits set by the values before it. */
+function clMeasCheck(m) {
+  const num = id => { const v = m.q('#' + id).value.trim(); return v === '' ? null : Number(v); };
+  const y = num('ptAgeY'), mo = num('ptAgeM') ?? 0;
+  const st = {errors: [], warnings: [], values: {}, months: null};
+  if (y != null) {
+    if (!Number.isInteger(y) || !Number.isInteger(mo) || y < 0 || mo < 0 || mo > 11 || y * 12 + mo > 216) st.errors.push('Age must be between 0 months and 18 years.');
+    else st.months = y * 12 + mo;
+  }
+  m.q('#ptAgeY').classList.toggle('bad', y != null && st.months == null);
+  const ready = [st.months != null && !!m.q('#ptSex').value, false, false];
+  const gate = [st.months == null ? 'Enter the age first' : 'Select the sex first', 'Enter a valid length / height first', 'Enter a valid weight first'];
+  const base = st.months != null ? growthRanges(st.months) : null;
+  for (const [k, label, unit, id, step] of MEAS) {
+    const f = m.q('#f-' + k), inp = m.q('#' + id), hint = m.q('#h-' + k);
+    const applies = !base ? step < 2 : k in base;
+    f.classList.toggle('hidden', !applies);
+    if (!applies) { f.dataset.s = ''; continue; }
+    inp.disabled = !ready[step];
+    if (!ready[step]) { hint.innerHTML = `<span>${gate[step]}</span>`; f.dataset.s = 'off'; continue; }
+    const [tl, th, al, ah] = growthRanges(st.months, st.values.height_cm)[k];
+    const v = num(id);
+    const s = v == null ? '' : (v < al || v > ah) ? 'err' : (v < tl || v > th) ? 'warn' : 'ok';
+    hint.innerHTML = `<span>Usual</span> ${tl}–${th} ${unit} · <span>Possible</span> ${al}–${ah} ${unit}` +
+      (s === 'err' ? `<div class="meas-msg"><span>Not possible for this child. Check the value and the unit.</span></div>`
+        : s === 'warn' ? `<div class="meas-msg"><span>Outside the usual range. Re-measure, or confirm below.</span></div>` : '');
+    f.dataset.s = s;
+    if (s === 'err') st.errors.push(`${label}: ${v} ${unit}`);
+    if (s === 'warn') st.warnings.push(k);
+    if (v != null && s !== 'err') st.values[k] = v;
+    if (k === 'height_cm') ready[1] = v != null && s !== 'err';
+    if (k === 'weight_kg') ready[2] = v != null && s !== 'err';
+  }
+  m.q('#ptMeasConfirm').classList.toggle('hidden', !st.warnings.length);
+  return st;
+}
+function clMeasWire(m) {
+  const run = () => clMeasCheck(m);
+  ['ptAgeY', 'ptAgeM', 'ptSex', ...MEAS.map(x => x[3])].forEach(id => { m.q('#' + id).addEventListener('input', run); m.q('#' + id).addEventListener('change', run); });
+  run();
+}
 function clReadPatient(m) {
-  const age = m.q('#ptAge').value;
-  return {full_name: m.q('#ptName').value.trim(), age: age === '' ? null : Number(age), gender: m.q('#ptSex').value || null,
+  const st = clMeasCheck(m);
+  const body = {full_name: m.q('#ptName').value.trim(), gender: m.q('#ptSex').value || null,
           guardian_name: m.q('#ptGuard').value.trim() || null, contact: m.q('#ptContact').value.trim() || null, notes: m.q('#ptNotes').value.trim(),
-          hide_identity: m.q('#ptHide').checked};
+          hide_identity: m.q('#ptHide').checked, age_months: st.months, age: st.months != null ? Math.floor(st.months / 12) : null};
+  MEAS.forEach(([k]) => { body[k] = st.values[k] ?? null; });
+  body.measurement_note = st.warnings.length ? m.q('#ptMeasNote').value.trim() : null;
+  let problem = null;
+  if (!body.full_name) problem = 'Patient name is required';
+  else if (st.months == null) problem = st.errors[0] || 'Enter the age';
+  else if (!body.gender) problem = 'Select the sex';
+  else if (st.errors.length) problem = 'Some measurements are not possible for this child. Check the values marked in red.';
+  else if (body.height_cm == null || body.weight_kg == null) problem = 'Enter length / height and weight';
+  else if (st.warnings.length && !(m.q('#ptMeasOk').checked && body.measurement_note)) problem = 'Confirm the values marked in amber and give a reason';
+  return {body, problem};
 }
 function clNewPatient(done) {
   const m = openModal({title: 'Register patient', body: clPatientForm({}, true),
     footer: `<button class="btn secondary" data-close>Cancel</button><button class="btn" id="ptSave">Register patient</button>`});
+  clMeasWire(m);
   m.q('#ptSave').onclick = () => withBusy(m.q('#ptSave'), 'Saving…', async () => {
-    const body = clReadPatient(m);
-    if (!body.full_name) return toast('Patient name is required', 'error');
+    const {body, problem} = clReadPatient(m);
+    if (problem) return toast(problem, 'error');
     if (!m.q('#ptConsent').checked) return toast('Guardian consent is required to register a patient', 'error');
     if (!body.guardian_name) return toast('Enter the parent or guardian who gave consent', 'error');
     Object.assign(body, {consent_given: true, consent_by: body.guardian_name, consent_relationship: m.q('#ptRel').value, consent_method: m.q('#ptMethod').value});
@@ -324,7 +395,7 @@ function clFilterPatients() {
   const rows = clPatientsCache.filter(p => !q || (p.full_name || '').toLowerCase().includes(q) || (p.patient_id || '').toLowerCase().includes(q));
   $('ptTable').innerHTML = rows.length ? `<div class="table-wrap"><table class="t"><thead><tr><th>Patient</th><th>ID</th><th>Age / sex</th><th>Scans</th><th>Last scan</th><th>Registered</th></tr></thead><tbody>
     ${rows.map(p => `<tr class="click" onclick="go('#/patient/${esc(p.patient_id)}')"><td><div class="row"><div class="avatar">${initials(p.full_name)}</div><b>${esc(p.full_name)}</b></div></td>
-      <td class="mono">${esc(p.patient_id)}</td><td>${p.age != null ? esc(p.age) + ' y' : '—'} ${p.gender ? '· ' + esc(p.gender) : ''}</td><td>${p.scan_count || 0}</td>
+      <td class="mono">${esc(p.patient_id)}</td><td>${esc(ageText(p))} ${p.gender ? '· ' + esc(p.gender) : ''}</td><td>${p.scan_count || 0}</td>
       <td class="small muted">${p.last_scan ? ago(p.last_scan) : '—'}</td><td class="small muted">${fmtDate(p.created_at, false)}</td></tr>`).join('')}</tbody></table></div>`
     : emptyState('users', q ? 'No matching patients' : 'No patients yet', q ? 'Try a different search.' : 'Register a patient to start scanning.');
 }
@@ -336,7 +407,7 @@ async function clPatient(id) {
   <div class="grid g-2-1">
     <div class="stack">
       <div class="card"><div class="card-b row wrap" style="gap:16px"><div class="avatar" style="width:56px;height:56px;font-size:20px">${initials(p.full_name)}</div>
-        <div style="flex:1;min-width:200px"><h2 style="font-size:22px">${esc(p.full_name)}</h2><div class="muted">${esc(p.patient_id)} · ${p.age != null ? esc(p.age) + ' years' : 'age not recorded'}${p.gender ? ' · ' + (p.gender === 'F' ? 'Female' : p.gender === 'M' ? 'Male' : esc(p.gender)) : ''}</div></div>
+        <div style="flex:1;min-width:200px"><h2 style="font-size:22px">${esc(p.full_name)}</h2><div class="muted">${esc(p.patient_id)} · ${p.age != null ? esc(ageText(p)) : '<span>age not recorded</span>'}${p.gender ? ' · ' + (p.gender === 'F' ? 'Female' : p.gender === 'M' ? 'Male' : esc(p.gender)) : ''}</div></div>
         <button class="btn secondary" onclick='clEditPatient(${JSON.stringify(p).replace(/'/g, "&#39;")})'>${icon('edit', 16)}Edit</button>
         <a class="btn" href="#/scan/${esc(p.patient_id)}">${icon('scan', 16)}New scan</a></div></div>
       ${card('Scan timeline', d.predictions.length ? `<div class="timeline">${d.predictions.map(x => `
@@ -349,6 +420,7 @@ async function clPatient(id) {
     </div>
     <div class="stack">
       ${card('Details', `<div class="stack small">
+        ${clMeasSummary(p)}
         <div><div class="label">Parent / guardian</div>${esc(p.guardian_name || '—')}</div>
         <div><div class="label">Contact</div>${esc(p.contact || '—')}</div>
         <div><div class="label">Clinical notes</div>${esc(p.notes || '—')}</div>
@@ -366,6 +438,15 @@ async function clPatient(id) {
         <div class="small muted" style="margin-top:4px">${esc(e.specialist_name || '')} · sent ${ago(e.created_at)}</div>
         ${e.specialist_comment ? `<div class="small" style="margin-top:4px">"${esc(e.specialist_comment)}"</div>` : ''}</div>`).join('') : '<p class="muted small">No referrals for this patient.</p>')}
     </div></div>`;
+}
+function clMeasSummary(p) {
+  const rows = [['Length / height', p.height_cm, 'cm'], ['Weight', p.weight_kg, 'kg'], ['Head circumference', p.head_circumference_cm, 'cm'], ['MUAC', p.muac_cm, 'cm']].filter(r => r[1] != null);
+  if (!rows.length) return '<div><div class="label">Measurements</div><span class="muted">Not recorded</span></div>';
+  const bmi = p.height_cm && p.weight_kg ? (p.weight_kg / (p.height_cm / 100) ** 2).toFixed(1) : null;
+  return `<div><div class="label">Measurements</div><div class="kv" style="margin-top:6px">${rows.map(([l, v, u]) => `<div><div class="k">${l}</div><div class="v">${esc(v)} <span class="small muted">${u}</span></div></div>`).join('')}
+    ${bmi ? `<div><div class="k">BMI</div><div class="v">${bmi}</div></div>` : ''}</div>
+    ${p.measurement_note ? `<div class="badge b-warn plain" style="margin-top:8px;white-space:normal">${icon('alert', 12)}<span>Confirmed unusual values:</span>&nbsp;${esc(p.measurement_note)}</div>` : ''}
+    ${p.measured_at ? `<div class="small muted" style="margin-top:4px"><span>Measured</span> ${fmtDate(p.measured_at)}</div>` : ''}</div>`;
 }
 function clConsent(pid, give, guardian = '') {
   const m = openModal({title: give ? 'Record guardian consent' : 'Withdraw consent', body: give ? `
@@ -405,9 +486,10 @@ async function clReassign(escId, currentId, pid) {
 function clEditPatient(p) {
   const m = openModal({title: 'Edit patient', body: clPatientForm(p),
     footer: `<button class="btn secondary" data-close>Cancel</button><button class="btn" id="ptSave">Save changes</button>`});
+  clMeasWire(m);
   m.q('#ptSave').onclick = () => withBusy(m.q('#ptSave'), 'Saving…', async () => {
-    const body = clReadPatient(m);
-    if (!body.full_name) return toast('Patient name is required', 'error');
+    const {body, problem} = clReadPatient(m);
+    if (problem) return toast(problem, 'error');
     try { await apiJSON(`/api/patients/${encodeURIComponent(p.patient_id)}`, {method: 'PATCH', json: body}); m.close(); toast('Patient updated', 'success'); route(); }
     catch (e) { toast(e.message, 'error'); }
   });
@@ -490,7 +572,7 @@ async function clCase(id) {
           {flush: true, action: `<a class="btn sm ghost" href="#/messages/${esc(d.escalations[0].escalation_id)}">${icon('chat', 15)}Full screen</a>`}) : ''}
       ${clinicalCard(c.clinical, p ? p.age : null)}
       ${p ? card('Patient', `<div class="stack small"><div class="row"><span class="muted">ID</span><span class="spacer"></span><span class="mono">${esc(p.patient_id)}</span></div>
-        <div class="row"><span class="muted">Age / sex</span><span class="spacer"></span>${p.age != null ? esc(p.age) + ' y' : '—'} ${p.gender ? '· ' + esc(p.gender) : ''}</div>
+        <div class="row"><span class="muted">Age / sex</span><span class="spacer"></span>${esc(ageText(p))} ${p.gender ? '· ' + esc(p.gender) : ''}</div>
         ${p.notes ? `<div><div class="label">Notes</div>${esc(p.notes)}</div>` : ''}</div>`) : ''}
     </div></div>`;
 }

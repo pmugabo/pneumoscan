@@ -47,7 +47,7 @@ from google.cloud.firestore_v1 import FieldFilter, Query
 from PIL import Image
 from pydantic import BaseModel
 
-from . import alerts, firebase, mfa
+from . import alerts, firebase, measurements, mfa
 from .inference import engine
 from .report import generate_report
 
@@ -244,6 +244,25 @@ class Feedback(BaseModel):
     follow_up_date: Optional[str] = None
 
 
+class SignupStart(BaseModel):
+    email: str
+    role: str = "clinician"
+
+
+class SignupComplete(BaseModel):
+    email: str
+    code: str
+    password: str
+    full_name: str
+    hospital: Optional[str] = None
+    role: str = "clinician"
+    language: Optional[str] = None
+
+
+class PasswordReset(BaseModel):
+    email: str
+
+
 class UserRegister(BaseModel):
     full_name: str
     hospital: Optional[str] = None
@@ -269,6 +288,12 @@ class PatientCreate(BaseModel):
     full_name: str
     age: Optional[int] = None
     gender: Optional[str] = None
+    age_months: Optional[int] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    head_circumference_cm: Optional[float] = None
+    muac_cm: Optional[float] = None
+    measurement_note: Optional[str] = None
     notes: Optional[str] = ""
     guardian_name: Optional[str] = None
     contact: Optional[str] = None
@@ -300,6 +325,12 @@ class PatientUpdate(BaseModel):
     full_name: Optional[str] = None
     age: Optional[int] = None
     gender: Optional[str] = None
+    age_months: Optional[int] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    head_circumference_cm: Optional[float] = None
+    muac_cm: Optional[float] = None
+    measurement_note: Optional[str] = None
     notes: Optional[str] = None
     guardian_name: Optional[str] = None
     contact: Optional[str] = None
@@ -556,12 +587,144 @@ def register(body: UserRegister, authorization: Optional[str] = Header(None)):
     snap = ref.get()
     if snap.exists:
         return doc_dict(snap, "user_id")
+    if not claims.get("email_verified"):
+        raise HTTPException(403, "Verify your email address first: create your account with the "
+                                 "emailed verification code.")
     profile = {"email": claims.get("email"), "full_name": body.full_name, "role": "clinician",
                "hospital": body.hospital, "created_at": now(), "is_active": True,
                "language": body.language if body.language in LANGUAGES else "en"}
     ref.set(profile)
     forget_profile(claims["uid"])
     return {"user_id": claims["uid"], **profile}
+
+
+# ------------------------------------------------------------------ sign-up with email code
+SIGNUP_ROLES = ("clinician", "specialist")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_signup_sent: dict = {}
+_reset_sent: dict = {}
+
+
+def _clean_email(email: str) -> str:
+    email = (email or "").strip().lower()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(400, "Enter a valid email address.")
+    return email
+
+
+def _signup_ref(email: str):
+    return col("signup_codes").document(mfa.hash_code(email)[:40])
+
+
+def _email_taken(email: str) -> bool:
+    firebase.init()
+    try:
+        fb_auth.get_user_by_email(email)
+        return True
+    except fb_auth.UserNotFoundError:
+        return False
+
+
+@app.post("/api/auth/signup/start")
+def signup_start(body: SignupStart):
+    """Email a 6-digit code to the address being registered. The account is created only
+    after the code is entered (signup/complete)."""
+    email = _clean_email(body.email)
+    if body.role not in SIGNUP_ROLES:
+        raise HTTPException(400, "Only clinician and specialist accounts can be created here.")
+    if not alerts.email_configured():
+        raise HTTPException(400, "Email is not set up yet, so verification codes cannot be sent. "
+                                 "Ask your administrator to complete Admin > Email settings.")
+    if _email_taken(email):
+        raise HTTPException(409, "An account with this email already exists. Sign in instead.")
+    if time.monotonic() - _signup_sent.get(email, -99) < 30:
+        raise HTTPException(429, "A code was just sent. Wait 30 seconds before asking for another.")
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    try:
+        alerts._send_email(email, f"PneumoScan verification code: {code}",
+                           f"Your PneumoScan account verification code is {code}. "
+                           "It expires in 10 minutes.\n"
+                           "If you did not try to create a PneumoScan account, ignore this email.")
+    except Exception as e:
+        raise HTTPException(502, f"Could not send the code by email: {str(e)[:200]}")
+    _signup_ref(email).set({"code_hash": mfa.hash_code(code), "exp": time.time() + EMAIL_CODE_TTL_S,
+                            "attempts": 0, "role": body.role, "created_at": now()})
+    _signup_sent[email] = time.monotonic()
+    log(None, f"signup_code_sent:{body.role}")
+    return {"sent_to": alerts.mask(email), "expires_in": EMAIL_CODE_TTL_S}
+
+
+@app.post("/api/auth/signup/complete")
+def signup_complete(body: SignupComplete):
+    email = _clean_email(body.email)
+    if body.role not in SIGNUP_ROLES:
+        raise HTTPException(400, "Only clinician and specialist accounts can be created here.")
+    name = (body.full_name or "").strip()
+    if not name:
+        raise HTTPException(400, "Enter your full name.")
+    if len(body.password or "") < 8:
+        raise HTTPException(400, "Password must be at least 8 characters.")
+    ref = _signup_ref(email)
+    d = ref.get().to_dict() or {}
+    if not d.get("code_hash") or (d.get("exp") or 0) < time.time():
+        raise HTTPException(400, "The code has expired or was never sent. Send a new code.")
+    if d.get("attempts", 0) >= 5:
+        ref.delete()
+        raise HTTPException(429, "Too many incorrect codes. Send a new code.")
+    if mfa.hash_code((body.code or "").replace(" ", "")) != d["code_hash"]:
+        ref.update({"attempts": firestore.Increment(1)})
+        raise HTTPException(400, "That code is not valid. Check the email and try again.")
+    if d.get("role") != body.role:
+        raise HTTPException(400, "The code was sent for a different account type. Send a new code.")
+    firebase.init()
+    try:
+        rec = fb_auth.create_user(email=email, password=body.password, display_name=name,
+                                  email_verified=True)
+    except fb_auth.EmailAlreadyExistsError:
+        raise HTTPException(409, "An account with this email already exists. Sign in instead.")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    ref.delete()
+    profile = {"email": email, "full_name": name, "role": body.role,
+               "hospital": (body.hospital or "").strip() or None, "created_at": now(),
+               "is_active": True, "email_verified": True,
+               "language": body.language if body.language in LANGUAGES else "en"}
+    col("users").document(rec.uid).set(profile)
+    log(None, f"account_created:{body.role}", rec.uid)
+    if body.role == "specialist":
+        for s in col("users").where(filter=FieldFilter("role", "==", "admin")).stream():
+            notify(s.id, "New specialist account",
+                   f"{name} ({email}) created a specialist account.", "users")
+    return {"user_id": rec.uid, **profile}
+
+
+@app.post("/api/auth/password-reset")
+def password_reset(body: PasswordReset):
+    """Email a Firebase password-reset link through the configured SMTP account. The reply never
+    says whether the address has an account. Without SMTP the browser asks Firebase to send it."""
+    email = _clean_email(body.email)
+    if not alerts.email_configured():
+        return {"via": "firebase"}
+    if time.monotonic() - _reset_sent.get(email, -99) < 30:
+        return {"via": "smtp"}
+    _reset_sent[email] = time.monotonic()
+    if not _email_taken(email):
+        return {"via": "smtp"}
+    try:
+        link = fb_auth.generate_password_reset_link(email)
+    except Exception as e:
+        print(f"[reset] could not create link: {e}")
+        return {"via": "firebase"}
+    try:
+        alerts._send_email(email, "Reset your PneumoScan password",
+                           "Someone asked to reset the password for your PneumoScan account.\n\n"
+                           f"Choose a new password here (the link expires in 1 hour):\n{link}\n\n"
+                           "If you did not ask for this, ignore this email; your password is unchanged.")
+    except Exception as e:
+        print(f"[reset] could not send email: {e}")
+        return {"via": "firebase"}
+    log(None, "password_reset_sent")
+    return {"via": "smtp"}
 
 
 @app.patch("/api/users/me/profile")
@@ -664,6 +827,10 @@ async def predict(file: UploadFile = File(...), patient_id: Optional[str] = None
         if not ((psnap.to_dict() or {}).get("consent") or {}).get("given"):
             raise HTTPException(400, "No valid guardian consent is recorded for this patient. "
                                      "Record consent on the patient page before analysing a radiograph.")
+    for v, lo, hi, name in ((respiratory_rate, 5, 150, "Respiratory rate"), (spo2, 50, 100, "SpO2"),
+                            (temperature_c, 30, 44, "Temperature")):
+        if v is not None and not lo <= v <= hi:
+            raise HTTPException(400, f"{name} {v:g} is not possible (allowed {lo}-{hi}).")
     signs = [x for x in (d.strip() for d in danger_signs.split(",")) if x in DANGER_SIGNS]
     clinical = {"respiratory_rate": respiratory_rate, "spo2": spo2,
                 "temperature_c": temperature_c, "danger_signs": signs}
@@ -836,6 +1003,37 @@ def mask_patient(pt: Optional[dict], user: dict) -> Optional[dict]:
             "full_name": patient_label(pt, user), "identity_hidden": True}
 
 
+MEASURE_KEYS = ("height_cm", "weight_kg", "head_circumference_cm", "muac_cm")
+
+
+def _checked_measurements(new: dict, old: dict) -> dict:
+    """Validate age and measurements in entry order. Values outside the usual range need a
+    reason in measurement_note; impossible values are rejected."""
+    if new.get("gender") not in (None, "F", "M"):
+        raise HTTPException(400, "Sex must be F or M.")
+    months = new.get("age_months")
+    if months is None and new.get("age") is not None:
+        months = new["age"] * 12
+    if months is None:
+        months = old.get("age_months", (old["age"] * 12) if old.get("age") is not None else None)
+    values = {k: new[k] if new.get(k) is not None else old.get(k) for k in MEASURE_KEYS}
+    errors, warnings = measurements.check(months, values)
+    if errors:
+        raise HTTPException(400, " ".join(errors))
+    note = (new.get("measurement_note") or "").strip()
+    if warnings and not note:
+        raise HTTPException(400, " ".join(warnings) + " Check the values, then confirm them and "
+                                 "give a reason (for example prematurity or malnutrition).")
+    out = {k: v for k, v in values.items() if v is not None}
+    if months is not None:
+        out["age_months"], out["age"] = int(months), int(months) // 12
+    if any(new.get(k) is not None for k in MEASURE_KEYS):
+        out["measured_at"] = now()
+    out["measurement_warnings"] = warnings
+    out["measurement_note"] = note if warnings else None
+    return out
+
+
 def _consent_record(given: bool, by, relationship, method, user: dict, reason=None) -> dict:
     if given and not (by or "").strip():
         raise HTTPException(400, "Enter the name of the parent or guardian giving consent.")
@@ -851,11 +1049,14 @@ def _consent_record(given: bool, by, relationship, method, user: dict, reason=No
 def create_patient(patient: PatientCreate, user: dict = Depends(require("clinician", "admin"))):
     if not patient.consent_given:
         raise HTTPException(400, "Guardian consent is required before registering a patient.")
+    if not patient.full_name.strip():
+        raise HTTPException(400, "Patient name is required.")
     consent = _consent_record(True, patient.consent_by or patient.guardian_name,
                               patient.consent_relationship, patient.consent_method, user)
+    meas = _checked_measurements(patient.model_dump(), {})
     patient_id = str(uuid.uuid4())[:8].upper()
     col("patients").document(patient_id).set({
-        "full_name": patient.full_name, "age": patient.age, "gender": patient.gender,
+        **meas, "full_name": patient.full_name.strip(), "gender": patient.gender,
         "notes": patient.notes, "guardian_name": patient.guardian_name,
         "contact": patient.contact, "created_at": now(), "created_by": user["user_id"],
         "consent": consent, "hide_identity": patient.hide_identity})
@@ -887,11 +1088,14 @@ def update_consent(patient_id: str, body: ConsentUpdate,
 def update_patient(patient_id: str, update: PatientUpdate,
                    user: dict = Depends(require("clinician", "admin"))):
     ref = col("patients").document(patient_id)
-    if not ref.get().exists:
+    snap = ref.get()
+    if not snap.exists:
         raise HTTPException(404, "Patient not found")
     changes = update.model_dump(exclude_none=True)
     if changes.get("full_name", "x").strip() == "":
         raise HTTPException(400, "Patient name cannot be empty")
+    if any(k in changes for k in ("age", "age_months", "gender", *MEASURE_KEYS)):
+        changes.update(_checked_measurements(changes, snap.to_dict() or {}))
     if changes:
         ref.update(changes)
         log(None, f"patient_updated:{patient_id}", user["user_id"])
@@ -1139,6 +1343,10 @@ def put_email_settings(body: EmailSettings, user: dict = Depends(require("admin"
     changes = {"user": addr, "sender": (body.sender or "").strip(), "host": body.host.strip() or "smtp.gmail.com",
                "port": body.port, "enabled": body.enabled, "updated_at": now(), "updated_by": user["user_id"]}
     if body.password and body.password.strip():
+        pw = body.password.replace(" ", "")
+        if changes["host"] == "smtp.gmail.com" and not (len(pw) == 16 and pw.isalpha()):
+            raise HTTPException(400, "That is not a Gmail app password. Your normal Gmail password does not work: "
+                                     "create a 16-letter app password at myaccount.google.com/apppasswords.")
         changes["password"] = body.password.strip()
     elif body.enabled and not alerts.stored_password_set():
         raise HTTPException(400, "Enter the app password.")
@@ -1279,6 +1487,15 @@ def conversations(user: dict = Depends(require("clinician", "specialist"))):
     return {"conversations": out, "unread": sum(c["unread"] for c in out)}
 
 
+def _mark_message_notes_read(uid: str, escalation_id: str):
+    link = f"messages/{escalation_id}"
+    q = col("notifications").where(filter=FieldFilter("user_id", "==", uid))
+    for n in q.stream():
+        d = n.to_dict() or {}
+        if d.get("link") == link and not d.get("read"):
+            n.reference.update({"read": True})
+
+
 @app.get("/api/escalations/{escalation_id}/messages")
 def get_messages(escalation_id: str, after: Optional[str] = None,
                  user: dict = Depends(require("clinician", "specialist"))):
@@ -1290,6 +1507,8 @@ def get_messages(escalation_id: str, after: Optional[str] = None,
         rows = [m for m in rows if (m.get("created_at") or "") > after]
     if (esc.get("unread") or {}).get(user["user_id"]):
         ref.update({f"unread.{user['user_id']}": 0})
+    if not after:
+        _mark_message_notes_read(user["user_id"], escalation_id)
     other = esc.get("assigned_to") if user["user_id"] == esc.get("created_by") else esc.get("created_by")
     other_read = (esc.get("read_at") or {}).get(other)
     ref.update({f"read_at.{user['user_id']}": now()})

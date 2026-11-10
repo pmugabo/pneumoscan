@@ -456,11 +456,18 @@ async function chatPoll(escId, first = false) {
     const readChanged = d.other_read_at !== st.otherRead;
     st.otherRead = d.other_read_at;
     if (first || fresh.length || readChanged) chatRender(escId, first || fresh.some(m => m.sender_id === ME.user_id));
-    if (fresh.length && !first) loadNotifications();
+    if (first || fresh.length) chatMarkRead(escId);
+    if (fresh.length || first) loadNotifications();
   } catch (e) {
     const log = document.querySelector(`#chat-${escId} .chat-log`);
     if (log && first) log.innerHTML = emptyState('alert', 'Conversation unavailable', esc(e.message));
   } finally { st.busy = false; }
+}
+/* Opening a thread reads it: clear its unread count everywhere it is shown. */
+function chatMarkRead(escId) {
+  const c = CONVS.find(x => x.escalation_id === escId);
+  if (c && c.unread) { c.unread = 0; if (document.getElementById('convList')) $('convList').innerHTML = convItems(escId); }
+  if (typeof spEscs !== 'undefined') { const e = spEscs.find(x => x.escalation_id === escId); if (e) e.unread = 0; }
 }
 function chatRender(escId, forceBottom) {
   const log = document.querySelector(`#chat-${escId} .chat-log`);
@@ -479,7 +486,7 @@ function chatRender(escId, forceBottom) {
     const me = m.sender_id === ME.user_id;
     const seen = me && m === myLast && st.otherRead && st.otherRead >= m.created_at;
     html += `<div class="msg ${me ? 'me' : ''}">${me ? '' : `<div class="who">${esc(m.sender_name || '')} · ${ROLE_NAME[m.sender_role] || ''}</div>`}${esc(m.text)}
-      <div class="meta">${new Date(m.created_at).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}${me ? (seen ? ' · Seen' : ' · Sent') : ''}</div></div>`;
+      <div class="meta">${new Date(m.created_at).toLocaleTimeString(uiLocale(), {hour: '2-digit', minute: '2-digit'})}${me ? (seen ? ' · Seen' : ' · Sent') : ''}</div></div>`;
   });
   log.innerHTML = html;
   if (forceBottom || nearBottom) log.scrollTop = log.scrollHeight;
