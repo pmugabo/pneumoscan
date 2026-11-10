@@ -394,3 +394,18 @@ table.t { width: 100%; border-collapse: collapse; }
   .lnav { gap: 6px; padding-left: 12px; padding-right: 12px; }
   .lnav .btn { padding: 0 10px; font-size: 12.5px; height: 34px; }
 }
+
+/* patient measurements */
+.meas-box { margin-top: 4px; padding: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2, var(--surface)); }
+.meas-box .label { display: flex; align-items: center; gap: 6px; }
+.meas-hint { margin-top: 4px; color: var(--text-3, var(--muted)); line-height: 1.4; }
+.meas-msg { font-weight: 600; margin-top: 2px; }
+.meas[data-s="warn"] .input { border-color: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.meas[data-s="warn"] .meas-msg { color: var(--warn); }
+.meas[data-s="err"] .input, .input.bad { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.meas[data-s="err"] .meas-msg { color: var(--danger); }
+.meas[data-s="ok"] .meas-hint { color: var(--ok); }
+.meas .input:disabled { opacity: .55; cursor: not-allowed; }
+.meas-confirm { margin-top: 12px; padding: 10px; border-radius: 10px; background: var(--warn-soft); }
+.grid.meas-age.g3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+@media (max-width: 560px) { .grid.meas-age.g3 { grid-template-columns: 1fr 1fr; } .meas-box .g2 { grid-template-columns: 1fr; } }

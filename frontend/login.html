@@ -8,11 +8,11 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'><path d='M12 3v8M7.5 6C5 7 3 11 3 16c0 2.5 1.5 4 3.5 4S10 19 10 16v-5.5C10 8 9 6 7.5 6zM16.5 6C19 7 21 11 21 16c0 2.5-1.5 4-3.5 4S14 19 14 16v-5.5C14 8 15 6 16.5 6z'/></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/assets/style.css?v=4">
+<link rel="stylesheet" href="/static/assets/style.css?v=8">
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="/static/assets/core.js?v=7"></script>
-<script src="/static/assets/i18n.js?v=7"></script>
+<script src="/static/assets/core.js?v=8"></script>
+<script src="/static/assets/i18n.js?v=8"></script>
 </head>
 <body>
 <div class="auth">
@@ -48,6 +48,7 @@
       </form>
 
       <form id="signup" class="stack hidden" style="margin-top:14px" novalidate autocomplete="off">
+        <div id="suDetails" class="stack">
         <div class="field"><label for="suName">Full name</label>
           <input class="input" id="suName" required placeholder="Dr. Jane Uwase" autocomplete="name"></div>
         <div class="field"><label for="suHosp">Health facility</label>
@@ -57,8 +58,16 @@
         <div class="field"><label for="suPass">Password</label>
           <div class="input-wrap"><input class="input" id="suPass" type="password" minlength="8" required placeholder="At least 8 characters" autocomplete="new-password" readonly data-noautofill>
             <button type="button" class="reveal" data-for="suPass">Show</button></div></div>
-        <button class="btn lg block" id="suBtn" type="submit">Create clinician account</button>
-        <p class="small muted">New accounts are clinician accounts. Specialist and administrator accounts are issued by your administrator.</p>
+        <button class="btn lg block" id="suBtn" type="submit">Send verification code</button>
+        <p class="small muted" id="suNote"></p>
+        </div>
+        <div id="suVerify" class="stack hidden">
+          <div class="form-note"><span>We sent a 6-digit code to</span> <b id="suSentTo"></b>. <span>Enter it to finish creating your account. The code expires in 10 minutes.</span></div>
+          <div class="field"><label for="suCode">Verification code</label>
+            <input class="input mfa-code" id="suCode" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="123456"></div>
+          <button class="btn lg block" id="suVerifyBtn" type="button">Verify and create account</button>
+          <div class="row" style="justify-content:space-between"><a href="#" id="suBack" class="small">Change details</a><a href="#" id="suResend" class="small">Resend code</a></div>
+        </div>
       </form>
 
       <form id="mfa" class="stack hidden" style="margin-top:14px" novalidate autocomplete="off">
@@ -110,7 +119,10 @@ $('art').innerHTML = `<div class="row" style="justify-content:space-between;gap:
   <h2>${P.art[0]}</h2><p>${P.art[1]}</p>
   <ul>${P.points.map(p => `<li>${icon('tick')}<span>${p}</span></li>`).join('')}</ul>
   <p class="small" style="opacity:.85;margin-top:0;line-height:1.5"><b>Disclaimer:</b> ${DISCLAIMER}</p>`;
-if (role !== 'clinician') $('modeSeg').classList.add('hidden');
+if (role === 'admin') $('modeSeg').classList.add('hidden');
+$('suNote').textContent = role === 'specialist'
+  ? 'This creates a specialist account. We email a code to confirm the address before the account is created. Clinicians register on the clinician sign-in page.'
+  : 'This creates a clinician account. We email a code to confirm the address before the account is created. Specialists register on the specialist sign-in page.';
 
 const sw = (ico, text, href, link) => `<div class="auth-switch"><span class="ico">${icon(ico)}</span>
   <div style="flex:1"><div style="font-weight:700;font-size:13.5px">${text}</div></div><a class="btn sm secondary" href="${href}">${link}</a></div>`;
@@ -135,6 +147,7 @@ function setMode(mode) {
   $('signin').classList.toggle('hidden', mode !== 'signin');
   $('signup').classList.toggle('hidden', mode !== 'signup');
   $('title').textContent = mode === 'signup' ? 'Create your account' : P.title;
+  $('suVerify').classList.add('hidden'); $('suDetails').classList.remove('hidden');
   showErr('');
 }
 function showErr(msg) { $('err').textContent = msg; $('err').classList.toggle('hidden', !msg); if (msg) $('note').classList.add('hidden'); }
@@ -212,22 +225,51 @@ $('signin').onsubmit = async e => {
   }
 };
 
+let suData = null, suResendAt = 0;
+async function sendSignupCode(btn) {
+  const r = await apiJSON('/api/auth/signup/start', {method: 'POST', json: {email: suData.email, role}});
+  suResendAt = Date.now() + 30000;
+  $('suSentTo').textContent = r.sent_to;
+  $('suDetails').classList.add('hidden'); $('suVerify').classList.remove('hidden'); $('modeSeg').classList.add('hidden');
+  $('title').textContent = 'Verify your email';
+  setTimeout(() => $('suCode').focus(), 50);
+}
 $('signup').onsubmit = async e => {
   e.preventDefault();
-  if (working) return;
+  if (working || !$('suVerify').classList.contains('hidden')) return;
   const name = $('suName').value.trim(), hosp = $('suHosp').value.trim(), email = $('suEmail').value.trim(), pass = $('suPass').value;
   if (!name || !email) return showErr('Enter your name and email.');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return showErr('Enter a valid email address.');
   if (pass.length < 8) return showErr('Password must be at least 8 characters.');
+  showErr('');
+  suData = {full_name: name, hospital: hosp || null, email, password: pass, role, language: currentLang()};
+  await withBusy($('suBtn'), 'Sending code…', async () => {
+    try { await sendSignupCode(); } catch (err) { showErr(err.message); }
+  });
+};
+$('suVerifyBtn').onclick = async () => {
+  const code = $('suCode').value.replace(/\s/g, '');
+  if (!/^\d{6}$/.test(code)) return showErr('Enter the 6-digit code from the email.');
   working = true; showErr('');
   try {
-    await withBusy($('suBtn'), 'Creating account…', async () => {
+    await withBusy($('suVerifyBtn'), 'Creating account…', async () => {
+      await apiJSON('/api/auth/signup/complete', {method: 'POST', json: {...suData, code}});
       await fbReady;
-      const cred = await fbAuth.createUserWithEmailAndPassword(email, pass);
-      await cred.user.updateProfile({displayName: name});
-      await apiJSON('/api/auth/register', {method: 'POST', json: {full_name: name, hospital: hosp || null}});
-      location.replace('/clinician');
+      await fbAuth.signInWithEmailAndPassword(suData.email, suData.password);
+      await enter();
     });
-  } catch (err) { working = false; showErr(err.code ? authMessage(err) : err.message); }
+  } catch (err) { working = false; showErr(err.code ? authMessage(err) : err.message); $('suCode').select(); }
+};
+$('suResend').onclick = async e => {
+  e.preventDefault();
+  if (Date.now() < suResendAt) return showErr(`Wait ${Math.ceil((suResendAt - Date.now()) / 1000)} s before asking for another code.`);
+  showErr('');
+  try { await sendSignupCode(); showNote('A new code is on its way.'); } catch (err) { showErr(err.message); }
+};
+$('suBack').onclick = e => {
+  e.preventDefault();
+  $('suVerify').classList.add('hidden'); $('suDetails').classList.remove('hidden'); $('modeSeg').classList.remove('hidden');
+  $('title').textContent = 'Create your account'; showErr('');
 };
 
 /* Browsers may autofill saved (old) credentials; fields stay read-only until the user focuses them. */
@@ -252,12 +294,16 @@ $('forgot').onclick = e => {
     const say = (cls, text) => m.q('#fpMsg').innerHTML = `<div class="${cls}" style="margin-top:12px">${text}</div>`;
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return say('form-error', 'Enter a valid email address.');
     try {
-      await fbReady;
-      await fbAuth.sendPasswordResetEmail(email, {url: location.origin + location.pathname});
+      const r = await apiJSON('/api/auth/password-reset', {method: 'POST', json: {email}});
+      if (r.via === 'firebase') {
+        await fbReady;
+        try { await fbAuth.sendPasswordResetEmail(email); }
+        catch (err) { if (err.code !== 'auth/user-not-found') throw err; }
+      }
       say('form-note', `If <b>${esc(email)}</b> has a PneumoScan account, a reset link is on its way. It can take a few minutes; check your spam folder too. The link expires in 1 hour.`);
       m.q('#fpSend').classList.add('hidden');
       m.q('.modal-f [data-close]').textContent = 'Done';
-    } catch (err) { say('form-error', esc(authMessage(err))); }
+    } catch (err) { say('form-error', esc(err.code ? authMessage(err) : err.message)); }
   });
 };
 const qs = new URLSearchParams(location.search);

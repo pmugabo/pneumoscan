@@ -94,7 +94,11 @@ def _send_email(to: str, subject: str, body: str):
         if c["port"] != 465 and not local:
             s.starttls()
         if c["user"] and not local:
-            s.login(c["user"], c["password"].replace(" ", ""))
+            try:
+                s.login(c["user"], c["password"].replace(" ", ""))
+            except (smtplib.SMTPAuthenticationError, smtplib.SMTPServerDisconnected):
+                raise RuntimeError("the email server rejected the sign-in. In Admin > Email settings, use a "
+                                   "16-letter Gmail app password, not the normal Gmail password.")
         s.send_message(msg)
 
 
