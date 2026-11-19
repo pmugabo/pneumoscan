@@ -143,10 +143,23 @@ class Engine:
             raise ValueError(f"unsupported architecture: {arch}")
         return m
 
-    def _target_layer(self):
-        return {"resnet50": lambda m: m.layer4[-1],
-                "densenet121": lambda m: m.features[-1],
-                "efficientnet_b0": lambda m: m.features[-1]}[self.arch](self.model)
+    def _forward(self, x):
+        """One pass returning (last feature map, logit, pooled embedding). Grad-CAM takes
+        gradients w.r.t. the feature map directly, so no module hooks are needed; hooks break
+        on DenseNet because its forward applies an in-place ReLU to the hooked output."""
+        m = self.model
+        if self.arch == "densenet121":
+            act = F.relu(m.features(x))
+            emb = torch.flatten(F.adaptive_avg_pool2d(act, 1), 1)
+            return act, m.classifier(emb), emb
+        if self.arch == "efficientnet_b0":
+            act = m.features(x)
+            emb = torch.flatten(m.avgpool(act), 1)
+            return act, m.classifier(emb), emb
+        body = nn.Sequential(*list(m.children())[:-2])
+        act = body(x)
+        emb = torch.flatten(m.avgpool(act), 1)
+        return act, m.fc(emb), emb
 
     def _embed(self, x):
         if self.arch == "resnet50":
@@ -190,23 +203,14 @@ class Engine:
         rgb, batch = self.preprocess(img)
         x = torch.tensor(batch)
 
-        target = self._target_layer()
-        store = {}
-        h1 = target.register_forward_hook(lambda m, i, o: store.__setitem__("act", o))
-        h2 = target.register_full_backward_hook(
-            lambda m, gi, go: store.__setitem__("grad", go[0]))
-
-        logit = self.model(x)
-        self.model.zero_grad()
-        logit.backward()
-        h1.remove(); h2.remove()
+        act, logit, feat = self._forward(x)
+        grad = torch.autograd.grad(logit.sum(), act)[0]
+        feat = feat.detach().numpy()
 
         T = self.gate["temperature"]
         prob = float(torch.sigmoid(logit / T).item())
         conf = prob if prob >= 0.5 else 1 - prob
 
-        with torch.no_grad():
-            feat = self._embed(x).numpy()
         dist = self.mahalanobis(feat)
 
         t_pneu, t_norm = self.thresholds()
@@ -234,8 +238,8 @@ class Engine:
                       "No pneumonia detected. No specialist review required.")
         heat = None
         if state != "REJECTED":
-            w = store["grad"].mean(dim=(2, 3), keepdim=True)
-            cam = F.relu((w * store["act"]).sum(1, keepdim=True))
+            w = grad.mean(dim=(2, 3), keepdim=True)
+            cam = F.relu((w * act).sum(1, keepdim=True))
             cam = F.interpolate(cam, (IMG_SIZE, IMG_SIZE), mode="bilinear",
                                 align_corners=False)[0, 0].detach().numpy()
             cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)

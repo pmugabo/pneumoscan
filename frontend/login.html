@@ -6,13 +6,14 @@
 <meta name="color-scheme" content="light">
 <title>Sign in · PneumoScan</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'><path d='M12 3v8M7.5 6C5 7 3 11 3 16c0 2.5 1.5 4 3.5 4S10 19 10 16v-5.5C10 8 9 6 7.5 6zM16.5 6C19 7 21 11 21 16c0 2.5-1.5 4-3.5 4S14 19 14 16v-5.5C14 8 15 6 16.5 6z'/></svg>">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/assets/style.css?v=8">
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="/static/assets/core.js?v=8"></script>
-<script src="/static/assets/i18n.js?v=8"></script>
+<link rel="stylesheet" href="/static/vendor/inter.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2563eb">
+<link rel="stylesheet" href="/static/assets/style.css?v=9">
+<script src="/static/vendor/firebase-app-compat.js"></script>
+<script src="/static/vendor/firebase-auth-compat.js"></script>
+<script src="/static/assets/core.js?v=9"></script>
+<script src="/static/assets/i18n.js?v=9"></script>
 </head>
 <body>
 <div class="auth">
@@ -154,7 +155,7 @@ function showErr(msg) { $('err').textContent = msg; $('err').classList.toggle('h
 function showNote(msg) { $('note').textContent = msg; $('note').classList.toggle('hidden', !msg); if (msg) $('err').classList.add('hidden'); }
 
 /* A session with the wrong role is signed out; one with the right role goes straight in. */
-let working = false;
+let working = false, lastPass = null, offlinePending = null;
 function mismatch(actual) {
   const where = {clinician: 'the clinician sign-in page', specialist: 'the specialist sign-in page', admin: 'administrator access'}[actual];
   return `This is the ${P.tag.toLowerCase()}, but this is a ${ROLE_NAME[actual].toLowerCase()} account. Please use ${where}.`;
@@ -168,6 +169,7 @@ async function enter() {
     throw e;
   }
   if (me.mfa_required && !me.mfa_verified) return askCode(me);
+  await startLocalSession(lastPass); lastPass = null;
   location.replace(ROLE_HOME[role]);
 }
 async function emailCode() {
@@ -181,7 +183,22 @@ async function emailCode() {
   });
 }
 $('mfaEmail').onclick = emailCode;
+async function offlineSignIn(email, pass, code) {
+  try {
+    const r = await apiJSON('/api/auth/offline/login', {method: 'POST', json: {email, password: pass, role, code: code || null}});
+    offlinePending = null;
+    sessionStorage.setItem('ps-local', r.token);
+    location.replace(ROLE_HOME[role]);
+  } catch (err) {
+    if (err.message === 'Two-factor code required.') { offlinePending = {email, pass}; return askCode({offline: true}); }
+    throw err;
+  }
+}
 function askCode(me = {}) {
+  if (me.offline) {
+    $('mfaEmail').classList.add('hidden');
+    $('mfa').querySelector('.form-note').textContent = 'No internet connection. Enter the code from your authenticator app, or one of your recovery codes.';
+  }
   if (me.mfa_email_available === false) $('mfaEmail').classList.add('hidden');
   if (me.mfa_method === 'email') { $('mfa').querySelector('.form-note').textContent = 'Two-factor sign-in is on for this account. Enter the 6-digit code we email you.'; if (me.mfa_email_available !== false) setTimeout(emailCode, 100); }
   ['signin', 'signup', 'modeSeg', 'switches'].forEach(id => $(id).classList.add('hidden'));
@@ -197,8 +214,10 @@ $('mfa').onsubmit = async e => {
   showErr('');
   await withBusy($('mfaBtn'), 'Verifying…', async () => {
     try {
+      if (offlinePending) return await offlineSignIn(offlinePending.email, offlinePending.pass, code);
       const r = await apiJSON('/api/auth/mfa/verify', {method: 'POST', json: {code}});
       sessionStorage.setItem('ps-mfa', r.mfa_token);
+      await startLocalSession(lastPass); lastPass = null;
       location.replace(ROLE_HOME[role]);
     } catch (err) { showErr(err.message); $('mfaCode').select(); }
   });
@@ -215,11 +234,16 @@ $('signin').onsubmit = async e => {
   try {
     await withBusy($('siBtn'), 'Signing in…', async () => {
       await fbReady;
-      await fbAuth.signInWithEmailAndPassword(email, pass);
+      lastPass = pass;
+      try { await fbAuth.signInWithEmailAndPassword(email, pass); }
+      catch (err) {
+        if (OFFLINE_MODE && ['auth/network-request-failed', 'auth/internal-error'].includes(err.code)) return await offlineSignIn(email, pass);
+        throw err;
+      }
       await enter();
     });
   } catch (err) {
-    working = false;
+    working = false; lastPass = null;
     showErr(err.code ? authMessage(err) : err.message);
     if (err.href) $('err').insertAdjacentHTML('beforeend', ` <a href="${err.href}" style="font-weight:700">Go there →</a>`);
   }
@@ -306,6 +330,9 @@ $('forgot').onclick = e => {
     } catch (err) { say('form-error', esc(err.code ? authMessage(err) : err.message)); }
   });
 };
+fbReady.then(() => {
+  if (OFFLINE_MODE && !navigator.onLine) showNote('No internet connection. You can still sign in with an account that has signed in on this computer before.');
+}).catch(() => {});
 const qs = new URLSearchParams(location.search);
 if (qs.get('e')) showErr(qs.get('e'));
 if (qs.get('out') === 'idle') showNote('You were signed out after 30 minutes of inactivity.');

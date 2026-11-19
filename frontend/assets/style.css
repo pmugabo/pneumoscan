@@ -409,3 +409,11 @@ table.t { width: 100%; border-collapse: collapse; }
 .meas-confirm { margin-top: 12px; padding: 10px; border-radius: 10px; background: var(--warn-soft); }
 .grid.meas-age.g3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
 @media (max-width: 560px) { .grid.meas-age.g3 { grid-template-columns: 1fr 1fr; } .meas-box .g2 { grid-template-columns: 1fr; } }
+
+/* offline clinic mode: connection / sync status */
+.sync-pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 999px; font-size: 12px; font-weight: 700; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
+.sync-pill .i { width: 14px; height: 14px; }
+.sync-pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.sync-pill.busy { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.sync-pill.off { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+@media (max-width: 640px) { .sync-pill span { display: none; } .sync-pill { padding: 0 8px; } }

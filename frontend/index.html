@@ -7,13 +7,14 @@
 <title>PneumoScan · Paediatric chest X-ray triage</title>
 <meta name="description" content="Calibrated, safety-gated pneumonia triage for paediatric chest radiographs, with specialist referral built in.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='2'><path d='M12 3v8M7.5 6C5 7 3 11 3 16c0 2.5 1.5 4 3.5 4S10 19 10 16v-5.5C10 8 9 6 7.5 6zM16.5 6C19 7 21 11 21 16c0 2.5-1.5 4-3.5 4S14 19 14 16v-5.5C14 8 15 6 16.5 6z'/></svg>">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/assets/style.css?v=8">
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="/static/assets/core.js?v=8"></script>
-<script src="/static/assets/i18n.js?v=8"></script>
+<link rel="stylesheet" href="/static/vendor/inter.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#2563eb">
+<link rel="stylesheet" href="/static/assets/style.css?v=9">
+<script src="/static/vendor/firebase-app-compat.js"></script>
+<script src="/static/vendor/firebase-auth-compat.js"></script>
+<script src="/static/assets/core.js?v=9"></script>
+<script src="/static/assets/i18n.js?v=9"></script>
 <style>
 .js-sr .sr { opacity: 0; transform: translateY(26px); transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1); will-change: opacity, transform; }
 .js-sr .sr.sr-in { opacity: 1; transform: none; }
@@ -66,7 +67,7 @@
   <div class="grid g4" style="margin-top:30px">
     <div class="card feature"><span class="step-n">1</span><h3 style="margin-top:14px">Register & upload</h3><p>The clinician registers the child and uploads a frontal chest radiograph.</p></div>
     <div class="card feature"><span class="step-n">2</span><h3 style="margin-top:14px">Guard the input</h3><p>A Mahalanobis distance check rejects images unlike the training data.</p></div>
-    <div class="card feature"><span class="step-n">3</span><h3 style="margin-top:14px">Calibrated decision</h3><p>A temperature-scaled EfficientNet-B0 decides only above a frozen confidence gate.</p></div>
+    <div class="card feature"><span class="step-n">3</span><h3 style="margin-top:14px">Calibrated decision</h3><p>A temperature-scaled DenseNet121 decides only above a frozen confidence gate.</p></div>
     <div class="card feature"><span class="step-n">4</span><h3 style="margin-top:14px">Specialist referral</h3><p>Uncertain cases go to a paediatric specialist's prioritised queue with notes and heatmap.</p></div>
   </div>
 </section>

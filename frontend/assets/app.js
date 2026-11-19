@@ -23,8 +23,28 @@ async function boot() {
   $('shell').classList.remove('hidden');
   loadNotifications();
   setInterval(loadNotifications, 30000);
-  fbAuth.onAuthStateChanged(u => { if (!u) location.replace(ROLE_LOGIN[ROLE]); });
+  fbAuth.onAuthStateChanged(u => { if (!u && !localToken()) location.replace(ROLE_LOGIN[ROLE]); });
   watchIdle();
+  watchSync();
+}
+
+/* Offline clinic mode: shows whether the internet is up and how many changes wait to sync. */
+function watchSync() {
+  if (!OFFLINE_MODE) return;
+  const pill = document.createElement('span');
+  pill.id = 'syncPill';
+  $('langSel').before(pill);
+  const draw = s => {
+    const on = s.online && navigator.onLine;
+    pill.className = 'sync-pill ' + (on ? (s.pending ? 'busy' : 'ok') : 'off');
+    pill.innerHTML = icon(on ? 'refresh' : 'power', 14) + `<span>${on ? (s.pending ? `${tr('Syncing')} · ${s.pending}` : tr('Online'))
+      : tr('Offline') + (s.pending ? ` · ${s.pending} ${tr('waiting to sync')}` : '')}</span>`;
+    pill.title = tr(on ? 'Connected. Changes are copied to the cloud automatically.'
+      : 'No internet. Your work is saved on this clinic computer and syncs automatically when the connection returns.');
+  };
+  const poll = () => apiJSON('/api/sync/status').then(draw).catch(() => draw({online: false, pending: 0}));
+  poll(); setInterval(poll, 15000);
+  addEventListener('online', poll); addEventListener('offline', poll);
 }
 
 /* Signs out after 30 minutes without interaction, with a warning 2 minutes before. */
@@ -237,11 +257,12 @@ function renderSettings() {
           <div class="field"><label>Email</label><input class="input" value="${esc(ME.email)}" disabled></div>
           <div class="row"><span class="badge b-accent plain">${ROLE_NAME[ROLE]}</span><span class="small muted">Roles are assigned by an administrator.</span>
             <span class="spacer"></span><button class="btn" id="pfBtn">Save profile</button></div></form>`)}
-      ${ROLE !== 'admin' ? card('Help & support', `<div class="help-list">
-          ${helpRow('faq', 'question', 'Frequently asked questions', 'Results, referrals, reports and your account.')}
-          ${helpRow('privacy', 'shield', 'Privacy policy', 'What PneumoScan stores and who can see it.')}
-          ${helpRow('terms', 'file', 'Terms of service', 'Conditions for using this research prototype.')}</div>
-          <p class="small muted" style="margin-top:12px">Need more help? Contact your PneumoScan administrator.</p>`) : ''}
+      ${card('Help & support', `<div class="help-list">
+          ${ROLE !== 'admin' ? helpRow('faq', 'question', 'Frequently asked questions', 'Results, referrals, reports and your account.') : ''}
+          ${helpRow('privacy', 'shield', 'Privacy policy', 'What PneumoScan stores, your rights and consent.')}
+          ${helpRow('terms', 'file', 'Terms of service', 'Conditions for using this research prototype.')}
+          ${helpRow('about', 'heart', 'About us', 'Our mission, technology, team and how to contact us.')}</div>
+          <p class="small muted" style="margin-top:12px">Need more help? Email us at ${CONTACT_LINK}.</p>`)}
     </div>
     <div class="stack">
       ${card('Change password', `<form class="stack" onsubmit="changePassword(event)">
@@ -409,6 +430,7 @@ function clinicalCard(c, age) {
       <div><div class="k">SpO₂</div><div class="v">${c.spo2 != null ? c.spo2 + '%' : '—'}</div></div>
       <div><div class="k">Temperature</div><div class="v">${c.temperature_c != null ? c.temperature_c + ' °C' : '—'}</div></div></div>
     ${flags.length ? `<div class="flag-list" style="margin-top:12px">${flags.map(f => `<span class="badge b-${f.tone}">${esc(f.text)}</span>`).join('')}</div>` : '<p class="small muted" style="margin-top:10px">No WHO danger signs recorded.</p>'}
+    ${c.vitals_note ? `<p class="small muted" style="margin-top:10px"><b>Unusual values confirmed:</b> ${esc(c.vitals_note)}</p>` : ''}
     ${isSevere(c, age) ? `<div class="form-error" style="margin-top:12px">Severe-illness criteria present: manage as severe pneumonia and refer urgently regardless of the X-ray result.</div>` : ''}`,
     {sub: 'Recorded at the time of the scan'});
 }
@@ -577,11 +599,19 @@ const FAQ_ROLE = {
   ],
 };
 
+const CONTACT_EMAIL = 'pneumoscanv@gmail.com';
+const CONTACT_LINK = `<a href="mailto:${CONTACT_EMAIL}" data-noi18n>${CONTACT_EMAIL}</a>`;
+const CONSENT_ROLE = {
+  clinician: 'As a clinician, you must explain the study to the parent or guardian, record their consent before the first scan, and record a withdrawal as soon as it is requested.',
+  specialist: 'As a specialist, you see only the cases referred to you, with the patient\'s identity hidden when the clinician chose that option. Use this data only to review those cases.',
+  admin: 'As an administrator, you can see account details, monitoring data and the audit log. Use them only to run the service, and answer any request to use these rights within 30 days.',
+};
 const HELP = {
   faq: {title: 'Frequently asked questions', body: () =>
     `<div class="faq-list">${[...(FAQ_ROLE[ROLE] || []), ...FAQ_COMMON].map(([q, a]) => faqItem(q, a)).join('')}</div>`},
   privacy: {title: 'Privacy policy', body: () => `<div class="legal">
     <p class="small muted">PneumoScan research prototype · applies to all users of this application.</p>
+    ${disclaimerBox('margin:12px 0')}
     <h4>1. What we store</h4>
     <ul><li><b>Account data</b>: your name, email, role, health facility and availability, managed through Firebase Authentication and Cloud Firestore.</li>
       <li><b>Patient data</b>: the patient details you register, such as name, age, sex and clinical findings.</li>
@@ -594,10 +624,25 @@ const HELP = {
     <p>Access is controlled by role. Clinicians see their own patients and cases. Specialists see the cases referred to them. Administrators manage accounts and can view monitoring data and the audit log.</p>
     <h4>4. Storage and security</h4>
     <p>Data is stored in Google Firebase (Cloud Firestore) and sent over encrypted connections. Every request is checked against your signed-in identity and role. Sessions end after 30 minutes of inactivity.</p>
+    <p>When a clinic runs PneumoScan offline, records are also kept on the clinic's own computer and copied to Firebase when the internet returns. Passwords used for offline sign-in are stored there only as secure hashes.</p>
     <h4>5. Your responsibilities</h4>
     <p>Enter only the patient information needed for triage. Use test or de-identified data unless the study's ethics approval permits otherwise.</p>
-    <h4>6. Retention and your rights</h4>
-    <p>Data is kept for the duration of the research project. To access, correct or delete your account or the data you entered, contact your PneumoScan administrator.</p></div>`},
+    <h4>6. Retention</h4>
+    <p>Data is kept for the duration of the research project, then deleted or fully anonymised.</p>
+    <h4>7. Your rights</h4>
+    <ul><li><b>Access:</b> ask for a copy of the personal data PneumoScan holds about you.</li>
+      <li><b>Correction:</b> ask for inaccurate or incomplete data to be corrected.</li>
+      <li><b>Deletion:</b> ask for your account and data to be deleted, unless the study's ethics approval requires them to be kept.</li>
+      <li><b>Withdrawal:</b> withdraw your consent at any time. Data collected before then stays only in anonymised research results.</li>
+      <li><b>Objection:</b> ask us to stop using your data for research monitoring.</li>
+      <li><b>Complaint:</b> raise a concern with us, or with the data protection authority in your country.</li></ul>
+    <p>Parents and guardians have the same rights over their child's data. They can use them through the treating clinician or by contacting us.</p>
+    <h4>8. Consent</h4>
+    <p>A patient's data and X-rays are stored only after a parent or guardian has agreed. The clinician records who gave consent, their relationship to the child and how it was given (verbal or written). Consent can be withdrawn at any time from the patient page, after which no new scans can be analysed for that child.</p>
+    <p>By creating an account and signing in, you agree to your account details and actions being stored as described in this policy.</p>
+    <p>${CONSENT_ROLE[ROLE]}</p>
+    <h4>9. Contact us</h4>
+    <p>For privacy questions, or to use any of your rights, email us at ${CONTACT_LINK}.</p></div>`},
   terms: {title: 'Terms of service', body: () => `<div class="legal">
     <p class="small muted">PneumoScan research prototype · by signing in you agree to these terms.</p>
     <h4>1. Research use only</h4>
@@ -615,7 +660,22 @@ const HELP = {
     <h4>6. Monitoring</h4>
     <p>Key actions are recorded in an audit log, and final diagnoses and specialist reviews are compared with model results to evaluate performance.</p>
     <h4>7. Contact</h4>
-    <p>For questions about these terms, contact your PneumoScan administrator.</p></div>`},
+    <p>For questions about these terms, email us at ${CONTACT_LINK}.</p></div>`},
+  about: {title: 'About us', body: () => `<div class="legal">
+    <p class="small muted">PneumoScan research prototype</p>
+    <h4>Our mission</h4>
+    <p>Children with pneumonia need fast, accurate care, but many clinics have no radiologist on site. Our mission is to help clinicians in low-resource settings triage paediatric chest X-rays during the same visit, so the sickest children are treated first and uncertain cases reach a specialist quickly.</p>
+    <h4>Our technology</h4>
+    <ul><li>A DenseNet121 deep-learning model trained on paediatric chest X-rays classifies each image as normal or pneumonia.</li>
+      <li>Temperature scaling calibrates the model's confidence, and an out-of-distribution check rejects images unlike its training data.</li>
+      <li>A confidence gate lets the model decide only clear cases. Uncertain cases are escalated to a specialist.</li>
+      <li>Grad-CAM heatmaps show which areas of the X-ray influenced each result.</li>
+      <li>It can run on a clinic computer without internet and syncs with the cloud when the connection returns.</li></ul>
+    <h4>Our team</h4>
+    <p>We are a team of healthcare professionals, researchers and software engineers working together to bring safe, explainable AI support to child health in low-resource settings.</p>
+    <h4>Contact us</h4>
+    <p>Questions, feedback or partnership ideas? Email us at ${CONTACT_LINK}.</p>
+    ${disclaimerBox('margin-top:14px')}</div>`},
 };
 function openHelp(kind) {
   const h = HELP[kind];

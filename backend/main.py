@@ -39,7 +39,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from firebase_admin import auth as fb_auth
 from google.cloud import firestore
@@ -47,7 +47,7 @@ from google.cloud.firestore_v1 import FieldFilter, Query
 from PIL import Image
 from pydantic import BaseModel
 
-from . import alerts, firebase, measurements, mfa
+from . import alerts, firebase, localauth, measurements, mfa
 from .inference import engine
 from .report import generate_report
 
@@ -163,6 +163,11 @@ def to_stored_image(img: Image.Image) -> str:
 def _decode(authorization: Optional[str]) -> dict:
     if not firebase.configured():
         raise HTTPException(503, "Firebase is not configured on the server.")
+    if authorization and authorization.lower().startswith("local ") and firebase.clinic_mode():
+        claims = localauth.verify(authorization.split(" ", 1)[1].strip())
+        if not claims:
+            raise HTTPException(401, "Invalid or expired session. Sign in again.")
+        return claims
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "Sign in required.")
     try:
@@ -202,6 +207,8 @@ def mfa_required(user: dict) -> bool:
 
 
 def _mfa_ok(user: dict, claims: dict, token: Optional[str]) -> bool:
+    if claims.get("local"):
+        return not mfa_required(user) or bool(claims.get("mfa"))
     return not mfa_required(user) or mfa.token_valid(token, user["user_id"], claims.get("auth_time"))
 
 
@@ -469,6 +476,80 @@ def mfa_verify(body: MfaCode, session: tuple = Depends(session_user)):
     token, exp = mfa.issue_token(uid, claims.get("auth_time"))
     log(None, "mfa_verified" + (":recovery_code" if recovery else ""), uid)
     return {"mfa_token": token, "expires_at": exp, "used_recovery_code": recovery}
+
+
+# ------------------------------------------------------------------ offline clinic mode
+class OfflineSession(BaseModel):
+    password: Optional[str] = None
+
+
+class OfflineLogin(BaseModel):
+    email: str
+    password: str
+    role: Optional[str] = None
+    code: Optional[str] = None
+
+
+_offline_failures: dict = {}
+
+
+def _clinic_only():
+    if not firebase.clinic_mode():
+        raise HTTPException(404, "Offline mode is not enabled on this server.")
+
+
+@app.post("/api/auth/offline/session")
+def offline_session(body: OfflineSession, session: tuple = Depends(session_user)):
+    """After an online sign-in: issue a clinic session token and, when the password is sent,
+    remember it (hashed, on this server only) so the user can sign in here offline."""
+    _clinic_only()
+    user, _, ok = session
+    if not ok:
+        raise HTTPException(401, "Two-factor verification required.")
+    if body.password:
+        localauth.enroll(user["user_id"], user["email"], body.password)
+    token, exp = localauth.issue(user["user_id"], mfa_ok=True)
+    return {"token": token, "expires_at": exp, "offline_sign_in": localauth.enrolled(user["email"])}
+
+
+@app.post("/api/auth/offline/login")
+def offline_login(body: OfflineLogin):
+    """Sign in without internet, for accounts that signed in online on this server before."""
+    _clinic_only()
+    email = body.email.strip().lower()
+    recent = [t for t in _offline_failures.get(email, []) if t > time.monotonic() - 600]
+    if len(recent) >= 5:
+        raise HTTPException(429, "Too many attempts. Wait 10 minutes and try again.")
+    uid = localauth.check_password(email, body.password)
+    if not uid:
+        _offline_failures[email] = recent + [time.monotonic()]
+        raise HTTPException(401, "Offline sign-in failed. Check your email and password. Offline sign-in "
+                                 "only works for accounts that have signed in online on this computer before.")
+    snap = col("users").document(uid).get()
+    if not snap.exists:
+        raise HTTPException(403, "No PneumoScan profile for this account.")
+    user = doc_dict(snap, "user_id")
+    if not user.get("is_active", True):
+        raise HTTPException(403, "User account is deactivated.")
+    if body.role and user.get("role") != body.role:
+        raise HTTPException(403, f"This is a {user.get('role')} account. Use the {user.get('role')} sign-in page.")
+    if mfa_required(user):
+        if not body.code:
+            raise HTTPException(401, "Two-factor code required.")
+        _mfa_attempt_guard(uid)
+        ok, _ = _check_mfa_code(uid, body.code)
+        if not ok:
+            _mfa_fail(uid)
+    _offline_failures.pop(email, None)
+    token, exp = localauth.issue(uid, mfa_ok=True)
+    log(None, "sign_in:offline", uid)
+    return {"token": token, "expires_at": exp, "role": user.get("role")}
+
+
+@app.get("/api/sync/status")
+def sync_status(user: dict = Depends(current_user)):
+    st = firebase.sync_status()
+    return {"clinic_mode": st is not None, **(st or {})}
 
 
 EMAIL_CODE_TTL_S = 600
@@ -808,6 +889,7 @@ def mark_notifications_read(user: dict = Depends(current_user)):
 async def predict(file: UploadFile = File(...), patient_id: Optional[str] = None,
                   respiratory_rate: Optional[int] = Form(None), spo2: Optional[int] = Form(None),
                   temperature_c: Optional[float] = Form(None), danger_signs: str = Form(""),
+                  vitals_note: str = Form(""),
                   user: dict = Depends(require("clinician", "admin"))):
     if file.content_type not in ALLOWED:
         raise HTTPException(400, "Upload a JPEG or PNG image.")
@@ -820,20 +902,26 @@ async def predict(file: UploadFile = File(...), patient_id: Optional[str] = None
     except Exception:
         raise HTTPException(400, "That file could not be read as an image.")
 
+    patient = {}
     if patient_id:
         psnap = col("patients").document(patient_id).get()
         if not psnap.exists:
             raise HTTPException(404, "Patient not found")
-        if not ((psnap.to_dict() or {}).get("consent") or {}).get("given"):
+        patient = psnap.to_dict() or {}
+        if not (patient.get("consent") or {}).get("given"):
             raise HTTPException(400, "No valid guardian consent is recorded for this patient. "
                                      "Record consent on the patient page before analysing a radiograph.")
-    for v, lo, hi, name in ((respiratory_rate, 5, 150, "Respiratory rate"), (spo2, 50, 100, "SpO2"),
-                            (temperature_c, 30, 44, "Temperature")):
-        if v is not None and not lo <= v <= hi:
-            raise HTTPException(400, f"{name} {v:g} is not possible (allowed {lo}-{hi}).")
     signs = [x for x in (d.strip() for d in danger_signs.split(",")) if x in DANGER_SIGNS]
-    clinical = {"respiratory_rate": respiratory_rate, "spo2": spo2,
-                "temperature_c": temperature_c, "danger_signs": signs}
+    vitals = {"respiratory_rate": respiratory_rate, "spo2": spo2, "temperature_c": temperature_c}
+    errors, warnings = measurements.check_vitals(measurements.age_now_months(patient), vitals, signs)
+    if errors:
+        raise HTTPException(400, " ".join(errors))
+    note = vitals_note.strip()
+    if warnings and not note:
+        raise HTTPException(400, " ".join(warnings) + " Re-check the values, then confirm them and give a "
+                                 "reason (for example severe respiratory distress).")
+    clinical = {**vitals, "danger_signs": signs,
+                "vitals_warnings": warnings, "vitals_note": note if warnings else None}
     result = engine.predict(img)
     pid = str(uuid.uuid4())
     col("predictions").document(pid).set({
@@ -1318,6 +1406,12 @@ def _sweep_loop():
 
 
 @app.on_event("startup")
+def start_alert_retries():
+    if firebase.clinic_mode() and firebase.configured() and getattr(firebase.db(), "sync", None):
+        firebase.db().sync.after_push.append(alerts.retry_queued)
+
+
+@app.on_event("startup")
 def start_referral_sweeper():
     if os.environ.get("REFERRAL_SWEEP", "1") != "0":
         threading.Thread(target=_sweep_loop, daemon=True).start()
@@ -1770,6 +1864,23 @@ def generate_report_endpoint(prediction_id: str, user: dict = Depends(current_us
                              f"attachment; filename=report_{prediction_id}.pdf"})
 
 
+NEEDS_INTERNET = "This action needs an internet connection. Try again when the connection is back."
+
+
+def _network_errors() -> tuple:
+    import requests
+    from firebase_admin import exceptions as fb_exc
+    from google.api_core import exceptions as gexc
+    from google.auth import exceptions as gauth
+    return (gexc.ServiceUnavailable, gexc.DeadlineExceeded, gexc.RetryError, gauth.TransportError,
+            requests.exceptions.ConnectionError, requests.exceptions.Timeout,
+            fb_exc.UnavailableError, fb_exc.DeadlineExceededError)
+
+
+for _exc in _network_errors():
+    app.add_exception_handler(_exc, lambda request, exc: JSONResponse({"detail": NEEDS_INTERNET}, 503))
+
+
 PAGES = {"/": "index.html",
          "/login": "login.html", "/specialist/login": "login.html", "/admin/login": "login.html",
          "/clinician": "app.html", "/specialist": "app.html", "/admin": "app.html"}
@@ -1783,5 +1894,15 @@ def _page(name: str):
 
 if FRONTEND.exists():
     app.mount("/static", StaticFiles(directory=FRONTEND), name="static")
+
+    @app.get("/sw.js", include_in_schema=False)
+    def service_worker():
+        return FileResponse(FRONTEND / "sw.js", media_type="application/javascript",
+                            headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    def web_manifest():
+        return FileResponse(FRONTEND / "manifest.webmanifest", media_type="application/manifest+json")
+
     for _path, _name in PAGES.items():
         app.add_api_route(_path, _page(_name), methods=["GET"], include_in_schema=False)

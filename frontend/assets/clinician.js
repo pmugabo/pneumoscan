@@ -69,9 +69,12 @@ async function clScan(preselect) {
         ${clPatientsCache.length ? '' : '<p class="small muted" style="margin-top:8px">No patients yet. Create one to continue.</p>'}<div id="scanConsent"></div></div>
       <div class="card-h" style="border-top:1px solid var(--border)"><span class="step-n">2</span><h3>Clinical signs</h3><span class="sub">optional, shared with the specialist</span></div>
       <div class="card-b stack"><div class="vitals">
-          <div class="field"><label>Resp. rate (/min)</label><input class="input" id="vRR" type="number" min="5" max="120" placeholder="e.g. 48"></div>
-          <div class="field"><label>SpO₂ (%)</label><input class="input" id="vSpO2" type="number" min="50" max="100" placeholder="e.g. 93"></div>
-          <div class="field"><label>Temperature (°C)</label><input class="input" id="vTemp" type="number" min="30" max="45" step="0.1" placeholder="e.g. 38.4"></div></div>
+          ${VITAL_FIELDS.map(([k, label, id, ph, step]) => `<div class="field meas" id="f-${k}"><label>${label}</label>
+            <input class="input" id="${id}" type="number" inputmode="decimal" step="${step}" placeholder="${ph}"><div class="meas-hint small" id="h-${k}"></div></div>`).join('')}</div>
+        <div id="vConfirm" class="meas-confirm hidden"><div id="vCross" style="margin-bottom:8px"></div>
+          <label class="check-row"><input type="checkbox" id="vOk"><span><b>I re-checked the vital signs marked in amber and they are correct</b>
+            <span class="small muted">Unusual values are possible, for example in severe respiratory distress or a cold newborn.</span></span></label>
+          <div class="field" style="margin-top:8px"><label>Reason *</label><input class="input" id="vNote" placeholder="e.g. severe respiratory distress, counted twice"></div></div>
         <div><div class="label" style="margin-bottom:8px">WHO general danger signs</div><div class="sign-grid">
           ${Object.entries(DANGER_SIGNS).map(([k, v]) => `<label><input type="checkbox" name="dsign" value="${k}">${v}</label>`).join('')}</div></div></div>
       <div class="card-h" style="border-top:1px solid var(--border)"><span class="step-n">3</span><h3>Radiograph</h3></div>
@@ -85,6 +88,39 @@ async function clScan(preselect) {
       <div class="card-b" id="scanResult">${emptyState('image', 'Awaiting radiograph', 'The decision, heatmap and confidence will appear here.')}</div></div>
   </div>`;
 }
+const VITAL_FIELDS = [['respiratory_rate', 'Resp. rate (/min)', 'vRR', 'e.g. 48', '1', '/min'],
+  ['spo2', 'SpO₂ (%)', 'vSpO2', 'e.g. 93', '1', '%'], ['temperature_c', 'Temperature (°C)', 'vTemp', 'e.g. 38.4', '0.1', '°C']];
+/* Checks each vital sign against limits for the selected patient's current age, then checks
+   that the values and danger signs fit together. */
+function clVitalsCheck() {
+  const p = clPatientsCache.find(x => x.patient_id === $('scanPatient').value);
+  const months = p ? ageNowMonths(p) : null, R = vitalRanges(months);
+  const st = {errors: [], warnings: [], cross: [], vals: {}};
+  const signs = [...document.querySelectorAll('input[name=dsign]:checked')].map(i => i.value);
+  for (const [k, , id, , , unit] of VITAL_FIELDS) {
+    const f = $('f-' + k), inp = $(id), hint = $('h-' + k);
+    inp.disabled = !p;
+    if (!p) { hint.innerHTML = `<span>${tr('Select the patient first')}</span>`; f.dataset.s = 'off'; continue; }
+    const raw = inp.value.trim(), v = raw === '' ? null : Number(raw), [tl, th, al, ah] = R[k];
+    let s = '', msg = 'Not possible. Check the value and the unit.';
+    if (v != null) {
+      if (k === 'temperature_c' && v >= 86 && v <= 113) { s = 'err'; msg = 'This looks like °F. Enter the temperature in °C.'; }
+      else if (k === 'spo2' && v > 0 && v <= 1) { s = 'err'; msg = 'Enter SpO₂ as a percentage, for example 94.'; }
+      else s = (v < al || v > ah) ? 'err' : (v < tl || v > th) ? 'warn' : 'ok';
+    }
+    hint.innerHTML = `<span>Usual</span> ${tl}–${th} ${unit} · <span>Possible</span> ${al}–${ah} ${unit}` +
+      (s === 'err' ? `<div class="meas-msg"><span>${msg}</span></div>`
+        : s === 'warn' ? '<div class="meas-msg"><span>Outside the usual range. Re-check, or confirm below.</span></div>' : '');
+    f.dataset.s = s;
+    if (s === 'err') st.errors.push(k);
+    if (s === 'warn') st.warnings.push(k);
+    if (v != null && s !== 'err') st.vals[k] = v;
+  }
+  if (!st.errors.length) st.cross = vitalCross(months, st.vals, signs);
+  $('vCross').innerHTML = st.cross.map(c => `<div class="meas-msg" style="color:var(--warn)">${icon('alert', 14)} <span>${c}</span></div>`).join('');
+  $('vConfirm').classList.toggle('hidden', !(st.warnings.length || st.cross.length));
+  return st;
+}
 function clConsentHint() {
   const p = clPatientsCache.find(x => x.patient_id === $('scanPatient').value);
   const ok = !p || (p.consent && p.consent.given);
@@ -94,7 +130,10 @@ function clConsentHint() {
 }
 function clScanAfter() {
   const drop = $('drop'), input = $('scanFile');
-  $('scanPatient').onchange = clConsentHint; clConsentHint();
+  $('scanPatient').onchange = () => { clConsentHint(); clVitalsCheck(); }; clConsentHint();
+  VITAL_FIELDS.forEach(([, , id]) => $(id).addEventListener('input', clVitalsCheck));
+  document.querySelectorAll('input[name=dsign]').forEach(i => i.addEventListener('change', clVitalsCheck));
+  clVitalsCheck();
   const pick = f => {
     if (!/^image\/(png|jpeg)$/.test(f.type)) return toast('Please choose a PNG or JPEG image', 'error');
     clFile = f;
@@ -112,11 +151,11 @@ function clScanAfter() {
     if (!clConsentHint()) return toast('Record guardian consent for this patient first', 'error');
     if (!clFile) return;
     const num = id => $(id).value.trim();
-    for (const [id, lo, hi, name] of [['vRR', 5, 150, 'Respiratory rate'], ['vSpO2', 50, 100, 'SpO₂'], ['vTemp', 30, 44, 'Temperature']]) {
-      if (num(id) && !(+num(id) >= lo && +num(id) <= hi)) { $(id).classList.add('bad'); return toast(`${tr(name)}: ${num(id)} ${tr('is not possible')} (${lo}–${hi})`, 'error'); }
-      $(id).classList.remove('bad');
-    }
+    const vs = clVitalsCheck(), confirmVitals = vs.warnings.length || vs.cross.length;
+    if (vs.errors.length) return toast('Some vital signs are not possible. Check the values marked in red.', 'error');
+    if (confirmVitals && !($('vOk').checked && $('vNote').value.trim())) return toast('Confirm the vital signs marked in amber and give a reason', 'error');
     const body = new FormData(); body.append('file', clFile);
+    if (confirmVitals) body.append('vitals_note', $('vNote').value.trim());
     if (num('vRR')) body.append('respiratory_rate', Math.round(+num('vRR')));
     if (num('vSpO2')) body.append('spo2', Math.round(+num('vSpO2')));
     if (num('vTemp')) body.append('temperature_c', +num('vTemp'));

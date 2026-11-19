@@ -166,9 +166,12 @@ async function withBusy(btn, label, fn) {
 
 /* ---------------- Firebase + API ---------------- */
 let fbAuth = null;
+let OFFLINE_MODE = false;          // server runs in offline clinic mode (local store + sync)
+const localToken = () => sessionStorage.getItem('ps-local');
 const fbReady = fetch('/api/firebase-config')
   .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(new Error(d.detail || 'Firebase is not configured'))))
   .then(cfg => {
+    OFFLINE_MODE = !!cfg.offlineMode;
     firebase.initializeApp(cfg);
     fbAuth = firebase.auth();
     fbAuth.setPersistence(firebase.auth.Auth.Persistence.SESSION);
@@ -178,12 +181,24 @@ const fbReady = fetch('/api/firebase-config')
 fbReady.catch(err => toast('Sign-in unavailable: ' + err.message, 'error'));
 
 /* Resolves with the current Firebase user (or null) once the session has been restored. */
-const authUser = () => fbReady.then(a => new Promise(res => { const off = a.onAuthStateChanged(u => { off(); res(u); }); }));
+const authUser = () => fbReady.then(a => new Promise(res => { const off = a.onAuthStateChanged(u => {
+  off(); res(u || (OFFLINE_MODE && localToken() ? {local: true} : null)); }); }));
+
+/* Offline clinic mode: after an online sign-in, get a clinic session token (and let this server
+   remember the password, hashed, so the same account can sign in here without internet). */
+async function startLocalSession(password) {
+  if (!OFFLINE_MODE) return;
+  try {
+    const r = await apiJSON('/api/auth/offline/session', {method: 'POST', json: {password: password || null}});
+    sessionStorage.setItem('ps-local', r.token);
+  } catch (_) { /* online session still works */ }
+}
 
 async function api(url, opts = {}) {
   await fbReady;
   const headers = {...(opts.headers || {})};
-  if (fbAuth.currentUser) headers.Authorization = 'Bearer ' + await fbAuth.currentUser.getIdToken();
+  if (OFFLINE_MODE && localToken()) headers.Authorization = 'Local ' + localToken();
+  else if (fbAuth.currentUser) headers.Authorization = 'Bearer ' + await fbAuth.currentUser.getIdToken();
   const mfaToken = sessionStorage.getItem('ps-mfa');
   if (mfaToken) headers['X-MFA-Token'] = mfaToken;
   if (opts.json !== undefined) { headers['Content-Type'] = 'application/json'; opts = {...opts, body: JSON.stringify(opts.json)}; }
@@ -235,5 +250,9 @@ async function signOut(to = '/') {
   sessionStorage.clear();
   location.replace(to);
 }
+/* Installable app: the service worker keeps the pages and scripts on the device. */
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname)))
+  addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+
 /* Pages restored from the back/forward cache re-run their auth checks. */
 window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });

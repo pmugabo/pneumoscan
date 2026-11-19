@@ -103,7 +103,7 @@ def _send_email(to: str, subject: str, body: str):
 
 
 
-def _deliver(to: str, subject: str, body: str, user_id: str, link: str) -> dict:
+def _deliver(to: str, subject: str, body: str, user_id: str, link: str, queue: bool = True) -> dict:
     live = email_configured()
     status, error = ("logged", None)
     if live:
@@ -112,6 +112,8 @@ def _deliver(to: str, subject: str, body: str, user_id: str, link: str) -> dict:
             status = "sent"
         except Exception as e:
             status, error = "failed", str(e)[:300]
+            if queue and firebase.clinic_mode() and _is_network_error(e):
+                status = "queued"
     try:
         firebase.db().collection("alert_outbox").add({
             "channel": "email", "to": mask(to), "user_id": user_id, "subject": subject,
@@ -121,6 +123,33 @@ def _deliver(to: str, subject: str, body: str, user_id: str, link: str) -> dict:
     except Exception as e:
         print(f"[alerts] could not record outbox entry: {e}")
     return {"status": status, "error": error}
+
+
+def _is_network_error(e: Exception) -> bool:
+    return isinstance(e, OSError) and not isinstance(e, smtplib.SMTPException)
+
+
+def retry_queued():
+    """Offline clinic mode: send alerts that were queued while the internet was down."""
+    if not email_configured():
+        return
+    q = firebase.db().collection("alert_outbox").where("status", "==", "queued")
+    for snap in q.stream():
+        d = snap.to_dict() or {}
+        user = firebase.db().collection("users").document(d.get("user_id") or "-").get()
+        email = (user.to_dict() or {}).get("email") if user.exists else None
+        if not email:
+            snap.reference.update({"status": "failed", "error": "no email address for this user"})
+            continue
+        try:
+            _send_email(email, d.get("subject", "PneumoScan"), d.get("body", ""))
+        except Exception as e:
+            if _is_network_error(e):
+                return
+            snap.reference.update({"status": "failed", "error": str(e)[:300]})
+            continue
+        snap.reference.update({"status": "sent", "error": None,
+                               "sent_at": datetime.now(timezone.utc).isoformat()})
 
 
 def alert_user(user: dict, subject: str, body: str, link: str = "", wait: bool = False):
@@ -137,7 +166,7 @@ def alert_user(user: dict, subject: str, body: str, link: str = "", wait: bool =
 
 def send_now(user: dict, subject: str, body: str) -> dict:
     """Send immediately and report the real outcome: sent, failed or logged (test mode)."""
-    return _deliver(user["email"], subject, body, user.get("user_id"), "")
+    return _deliver(user["email"], subject, body, user.get("user_id"), "", queue=False)
 
 
 def status() -> dict:
