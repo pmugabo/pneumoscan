@@ -102,3 +102,71 @@ def check(age_months: Optional[int], values: dict) -> tuple[list, list]:
             warnings.append(f"{name} {v:g} {unit} is outside the usual range "
                             f"{tl:g}-{th:g} {unit} for this child.")
     return errors, warnings
+
+
+# ------------------------------------------------------------------ vital signs at the scan
+# Respiratory rate bands by age (months): (typical low, typical high, allowed low, allowed high).
+# "Typical" already includes the fast breathing expected with pneumonia (WHO limits 60/50/40);
+# values beyond it are possible (severe distress, exhaustion) but must be confirmed.
+RR_BANDS = ((2, (30, 80, 10, 120)), (12, (24, 70, 10, 100)), (60, (20, 60, 8, 90)),
+            (144, (14, 45, 6, 70)), (10_000, (12, 35, 5, 60)))
+RR_ANY_AGE = (12, 80, 5, 120)
+SPO2_PCT = (85, 100, 50, 100)        # below 85 % happens (severe pneumonia, cyanotic heart disease)
+TEMP_C = (35.0, 40.5, 30.0, 43.0)    # below 35 °C: hypothermia (neonates); above 40.5 °C: hyperpyrexia
+VITAL_LABELS = {"respiratory_rate": ("Respiratory rate", "/min"), "spo2": ("SpO2", "%"),
+                "temperature_c": ("Temperature", "°C")}
+
+
+def age_now_months(patient: dict, at: Optional[str] = None) -> Optional[float]:
+    """Age today from the age recorded when the patient was registered or last measured."""
+    from datetime import datetime, timezone
+    months = patient.get("age_months")
+    if months is None and patient.get("age") is not None:
+        months = patient["age"] * 12
+    if months is None:
+        return None
+    since = patient.get("measured_at") or patient.get("created_at")
+    try:
+        then = datetime.fromisoformat(since)
+        now = datetime.fromisoformat(at) if at else datetime.now(timezone.utc)
+        months += max(0.0, (now - then).days / 30.44)
+    except (TypeError, ValueError):
+        pass
+    return float(months)
+
+
+def vital_ranges(age_months: Optional[float]) -> dict:
+    rr = RR_ANY_AGE if age_months is None else next(r for lim, r in RR_BANDS if age_months < lim)
+    return {"respiratory_rate": rr, "spo2": SPO2_PCT, "temperature_c": TEMP_C}
+
+
+def check_vitals(age_months: Optional[float], values: dict, signs=()) -> tuple[list, list]:
+    """Return (errors, warnings) for the vital signs recorded with a scan. Errors block the
+    scan; warnings (unusual values, or values that do not fit together) need a reason."""
+    errors, warnings = [], []
+    rr, spo2, temp = values.get("respiratory_rate"), values.get("spo2"), values.get("temperature_c")
+    if temp is not None and 86 <= temp <= 113:
+        errors.append(f"Temperature {temp:g} looks like °F ({(temp - 32) / 1.8:.1f} °C). Enter it in °C.")
+        temp = None
+    if spo2 is not None and 0 < spo2 <= 1:
+        errors.append("Enter SpO2 as a percentage, for example 94, not 0.94.")
+        spo2 = None
+    r = vital_ranges(age_months)
+    for key, v in (("respiratory_rate", rr), ("spo2", spo2), ("temperature_c", temp)):
+        if v is None:
+            continue
+        name, unit = VITAL_LABELS[key]
+        tl, th, al, ah = r[key]
+        if not al <= v <= ah:
+            errors.append(f"{name} {v:g} {unit} is not possible (allowed {al:g}-{ah:g} {unit}).")
+        elif not tl <= v <= th:
+            warnings.append(f"{name} {v:g} {unit} is outside the usual range {tl:g}-{th:g} {unit}"
+                            + (" for this age." if key == "respiratory_rate" and age_months is not None else "."))
+    if errors:
+        return errors, warnings
+    if "cyanosis" in (signs or ()) and spo2 is not None and spo2 >= 94:
+        warnings.append(f"Central cyanosis is recorded but SpO2 is {spo2:g} %. Check the probe and the child.")
+    if spo2 is not None and spo2 < 85 and rr is not None and rr < r["respiratory_rate"][0]:
+        warnings.append(f"Very low SpO2 ({spo2:g} %) with a slow breathing rate ({rr:g}/min) is unusual. "
+                        "Recount the breaths and check the probe; a tiring child needs urgent care.")
+    return errors, warnings

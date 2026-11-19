@@ -31,7 +31,7 @@ class TestEngine:
         """Test that Mahalanobis distance returns a float."""
         engine = Engine()
         if not engine.demo and engine.means is not None:
-            feat = np.random.randn(1280).astype(np.float64)
+            feat = np.random.randn(engine.means.shape[1]).astype(np.float64)
             distance = engine.mahalanobis(feat)
             assert isinstance(distance, float)
             assert distance >= 0

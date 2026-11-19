@@ -280,7 +280,8 @@ def test_chat_between_clinician_and_specialist(clinician, specialist, admin):
                       data={"respiratory_rate": "52", "spo2": "88",
                             "danger_signs": "chest_indrawing,bogus"}).json()
     assert pid["clinical"] == {"respiratory_rate": 52, "spo2": 88, "temperature_c": None,
-                               "danger_signs": ["chest_indrawing"]}
+                               "danger_signs": ["chest_indrawing"], "vitals_warnings": [],
+                               "vitals_note": None}
     esc = client.post("/api/escalations", headers=clinician["headers"],
                       json={"prediction_id": pid["prediction_id"],
                             "specialist_id": specialist["uid"]}).json()
@@ -642,6 +643,42 @@ def test_measurement_ranges_follow_entry_order():
     assert M.check(216, {"height_cm": 175, "weight_kg": 70}) == ([], [])
     tall, short = M.ranges(120, 150)["weight_kg"], M.ranges(120, 110)["weight_kg"]
     assert tall[3] > short[3]                                              # weight limit follows height
+
+
+def test_vital_sign_rules():
+    from backend import measurements as M
+    assert M.check_vitals(24, {"respiratory_rate": 48, "spo2": 93, "temperature_c": 38.4}) == ([], [])
+    assert M.check_vitals(24, {"respiratory_rate": 95})[0]                 # impossible at 2 years
+    assert M.check_vitals(1, {"respiratory_rate": 95})[1]                  # possible in a newborn: confirm
+    assert "°F" in M.check_vitals(24, {"temperature_c": 101.3})[0][0]       # Fahrenheit entered
+    assert M.check_vitals(24, {"spo2": 0.94})[0]                           # fraction instead of %
+    assert M.check_vitals(24, {"temperature_c": 34.2})[1]                  # hypothermia: confirm
+    assert M.check_vitals(24, {"temperature_c": 45})[0]
+    assert M.check_vitals(24, {"spo2": 97}, ["cyanosis"])[1]               # signs do not fit
+    assert M.check_vitals(36, {"spo2": 80, "respiratory_rate": 15})[1][-1].startswith("Very low SpO2")
+    assert M.vital_ranges(200)["respiratory_rate"][1] < M.vital_ranges(1)["respiratory_rate"][1]
+    assert round(M.age_now_months({"age_months": 10, "created_at": "2026-01-01T00:00:00+00:00"},
+                                  at="2026-07-02T00:00:00+00:00")) == 16
+
+
+@needs_emulator
+def test_scan_vital_sign_safeguards(clinician):
+    h = clinician["headers"]
+    pt = client.post("/api/patients", headers=h, json={
+        "full_name": "Vitals Child", "gender": "F", "guardian_name": "Parent", "consent_given": True,
+        "consent_by": "Parent", "age_months": 24, "height_cm": 86, "weight_kg": 12}).json()["patient_id"]
+    url = f"/api/predict?patient_id={pt}"
+    r = client.post(url, files=sample_upload(), headers=h, data={"respiratory_rate": 95})
+    assert r.status_code == 400 and "not possible" in r.json()["detail"]
+    r = client.post(url, files=sample_upload(), headers=h, data={"temperature_c": 101.3})
+    assert r.status_code == 400 and "°F" in r.json()["detail"]
+    r = client.post(url, files=sample_upload(), headers=h, data={"spo2": 78})
+    assert r.status_code == 400 and "reason" in r.json()["detail"]
+    r = client.post(url, files=sample_upload(), headers=h,
+                    data={"spo2": 78, "vitals_note": "Severe respiratory distress, rechecked"})
+    assert r.status_code == 200
+    c = r.json()["clinical"]
+    assert c["vitals_warnings"] and c["vitals_note"].startswith("Severe")
 
 
 @needs_emulator

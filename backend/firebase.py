@@ -9,11 +9,16 @@ Credentials, first match wins:
 
 The browser config comes from FIREBASE_WEB_CONFIG (JSON string) or
 <repo>/firebase-web-config.json.
+
+Offline clinic mode (PNEUMOSCAN_OFFLINE=1): db() returns the local store in
+backend/localstore.py, kept in PNEUMOSCAN_LOCAL_DB (default <repo>/data/clinic.db) and
+synced with Firestore in the background whenever the internet is available.
 """
 from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -28,6 +33,16 @@ WEB_CONFIG_FILE = ROOT / "firebase-web-config.json"
 
 _app: Optional[firebase_admin.App] = None
 _db = None
+_remote = None
+_init_lock = threading.Lock()
+
+
+def clinic_mode() -> bool:
+    return os.environ.get("PNEUMOSCAN_OFFLINE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def local_db_path() -> Path:
+    return Path(os.environ.get("PNEUMOSCAN_LOCAL_DB") or ROOT / "data" / "clinic.db")
 
 
 def _credential():
@@ -48,7 +63,14 @@ def using_emulator() -> bool:
 
 def init() -> Optional[firebase_admin.App]:
     """Initialise once. Returns None when no credentials and no emulator are configured."""
-    global _app, _db
+    if _app is not None:
+        return _app
+    with _init_lock:
+        return _init()
+
+
+def _init() -> Optional[firebase_admin.App]:
+    global _app, _db, _remote
     if _app is not None:
         return _app
     if using_emulator():
@@ -61,8 +83,27 @@ def init() -> Optional[firebase_admin.App]:
             return None
         app = firebase_admin.initialize_app(cred)
         _db = firestore.client(app)
+    _remote = _db
+    if clinic_mode():
+        from .localstore import LocalStore
+        _db = LocalStore(local_db_path(), remote=_remote)
+        if os.environ.get("PNEUMOSCAN_SYNC", "1") != "0":
+            _db.sync.start()
+        print(f"[firebase] offline clinic mode: local store {local_db_path()}")
     _app = app
     return _app
+
+
+def remote_db():
+    """Cloud Firestore itself, bypassing the local store."""
+    init()
+    return _remote
+
+
+def sync_status() -> Optional[dict]:
+    if not clinic_mode() or init() is None or getattr(_db, "sync", None) is None:
+        return None
+    return _db.sync.status()
 
 
 def configured() -> bool:
@@ -92,6 +133,7 @@ def web_config() -> Optional[dict]:
                "authDomain": "localhost"}
     else:
         return None
+    cfg["offlineMode"] = clinic_mode()
     emu = os.environ.get("FIREBASE_AUTH_EMULATOR_HOST")
     if emu:
         cfg["authEmulatorUrl"] = f"http://{emu}"

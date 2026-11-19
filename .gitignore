@@ -10,3 +10,6 @@ serviceAccountKey.json
 firebase-web-config.json
 firebase-debug.log
 firestore-debug.log
+models/**/*.pt
+models/**/*.npz
+data/

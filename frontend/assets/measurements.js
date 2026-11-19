@@ -39,3 +39,29 @@ function growthRanges(months, heightCm) {
   }
   return out;
 }
+
+/* Vital signs recorded with a scan; mirrors check_vitals() in backend/measurements.py.
+   [typical low, typical high, allowed low, allowed high]; respiratory rate depends on age. */
+const VITALS = {
+  rr: [[2, [30, 80, 10, 120]], [12, [24, 70, 10, 100]], [60, [20, 60, 8, 90]], [144, [14, 45, 6, 70]], [1e9, [12, 35, 5, 60]]],
+  rrAny: [12, 80, 5, 120], spo2: [85, 100, 50, 100], temp: [35.0, 40.5, 30.0, 43.0],
+};
+function ageNowMonths(p) {
+  let m = p.age_months ?? (p.age != null ? p.age * 12 : null);
+  if (m == null) return null;
+  const since = Date.parse(p.measured_at || p.created_at || '');
+  if (!isNaN(since)) m += Math.max(0, Math.floor((Date.now() - since) / 864e5) / 30.44);
+  return m;
+}
+function vitalRanges(months) {
+  return {respiratory_rate: months == null ? VITALS.rrAny : VITALS.rr.find(([lim]) => months < lim)[1],
+          spo2: VITALS.spo2, temperature_c: VITALS.temp};
+}
+function vitalCross(months, v, signs) {
+  const out = [];
+  if (signs.includes('cyanosis') && v.spo2 != null && v.spo2 >= 94)
+    out.push('Central cyanosis is recorded but SpO₂ is normal. Check the probe and the child.');
+  if (v.spo2 != null && v.spo2 < 85 && v.respiratory_rate != null && v.respiratory_rate < vitalRanges(months).respiratory_rate[0])
+    out.push('Very low SpO₂ with a slow breathing rate is unusual. Recount the breaths and check the probe; a tiring child needs urgent care.');
+  return out;
+}

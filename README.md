@@ -46,7 +46,7 @@ and referral stay with the clinician.
 
 | # | Requirement | Where it is addressed |
 |---|---|---|
-| R1 | Classify a paediatric chest X-ray as normal or pneumonia | `models/efficientnet_b0.pt`, `backend/inference.py` |
+| R1 | Classify a paediatric chest X-ray as normal or pneumonia | `models/densenet121.pt`, `backend/inference.py` |
 | R2 | Return a calibrated confidence, not a raw score | Temperature scaling, `models/gate_params.json` |
 | R3 | Refuse inputs outside the training distribution | Mahalanobis gate, `models/gate_stats.npz` |
 | R4 | Return one of four triage states | `CLEARED`, `FLAGGED_URGENT`, `ESCALATED`, `REJECTED` |
@@ -103,22 +103,29 @@ model selection or threshold fitting. Split is by patient; 32 duplicate files re
 AUC is the comparable column: operating thresholds differ between models (the
 selected model uses its calibrated gate threshold, classical models use a
 validation-fitted one), so sensitivity and specificity are not like-for-like.
-EfficientNetB0 was selected by validation AUC, which was effectively tied across
-the three pretrained models (0.9986 to 0.9987) at four decimals. DenseNet121 scores
-highest on test AUC, a reminder that near-identical validation scores do not
-reliably rank models.
+The table above is from the first notebook run. The deployed model is **DenseNet121**
+from notebook v2 (`results/v2/`): test AUC 0.971, and the safest behaviour on degraded
+and out-of-distribution images among the candidates. The earlier EfficientNetB0
+artefacts are kept in `models/archive/efficientnet_b0/` for reproducibility.
 
-**Confidence gate, EfficientNetB0:**
+**Confidence gate, DenseNet121 (deployed):**
 
-| | All 618 images | Accepted only (457) |
+| | All 618 images | Accepted only (419) |
 |---|---|---|
-| Sensitivity | 0.946 | **1.000** |
-| Specificity | 0.870 | 0.706 |
+| Sensitivity | 0.997 | **1.000** |
+| Specificity | 0.654 | 0.851 |
 
-Autonomy rate **73.9%**: 457 of 618 resolved without escalation, 147 escalated for
-low confidence, 14 rejected as out of distribution. The gate buys sensitivity at
+Autonomy rate **67.8%**: 419 of 618 resolved without escalation (80 cleared, 339 flagged
+urgent), 157 escalated for low confidence, 42 rejected as out of distribution. No
+pneumonia case was cleared. The gate buys sensitivity at
 the cost of specificity, which is the intended trade in a screening setting: a
 missed pneumonia is the dangerous error, an unnecessary review is not.
+
+The notebook's symmetric gate cleared a case only when P(pneumonia) <= 0.0002, which
+cleared 36 children and escalated 201. `scripts/retune_gate.py` refits only the normal
+side on the held-out `sel` and `cal` development splits (no retraining): the highest
+cut-off that clears no in-distribution pneumonia there is P <= 0.0198. Temperature,
+distance threshold and the pneumonia cut-off are unchanged from the notebook.
 
 Not yet measured: gate behaviour on genuinely out-of-distribution inputs (adult,
 degraded, non-chest images).
@@ -151,8 +158,8 @@ pneumonia, and temperature scaling then calibrates it.
 |---|---|---|---|
 | Small CNN (from scratch) | 4 blocks of Conv 3x3 (32, 64, 128, 128) + BatchNorm + MaxPool, global average pool, Dropout 0.3, Linear to 1 | ReLU | 0.24M |
 | ResNet50 | ImageNet-pretrained, final layer replaced by Linear to 1 | ReLU | 23.51M |
-| DenseNet121 | ImageNet-pretrained, classifier replaced by Linear to 1 | ReLU | 6.95M |
-| **EfficientNetB0 (deployed)** | ImageNet-pretrained, last layer replaced by Linear to 1 | SiLU | 4.01M |
+| **DenseNet121 (deployed)** | ImageNet-pretrained, classifier replaced by Linear to 1 | ReLU | 6.95M |
+| EfficientNetB0 | ImageNet-pretrained, last layer replaced by Linear to 1 | SiLU | 4.01M |
 
 **Training setup**
 - Input: 224 x 224, ImageNet mean and standard deviation.
@@ -220,7 +227,7 @@ python -m scripts.seed_firebase --admin-email admin@test.rw --admin-password pas
 uvicorn backend.main:app --reload
 ```
 
-The server prints `[engine] loaded efficientnet_b0 ...` when the model and gate
+The server prints `[engine] loaded densenet121 ...` when the model and gate
 thresholds have loaded. Stop it with Ctrl+C.
 
 | URL | What |
@@ -238,7 +245,7 @@ The three files the app needs are included in `models/`:
 ```
 models/gate_params.json      selected architecture, temperature, both thresholds
 models/gate_stats.npz        class means + precision matrix for Mahalanobis
-models/efficientnet_b0.pt    weights (name matches selected_model in gate_params.json)
+models/densenet121.pt        weights (name matches selected_model in gate_params.json)
 ```
 
 Without them the API starts in **DEMO mode**: the interface works but returns no
@@ -297,8 +304,8 @@ Example response (values illustrative):
   "ood_score": 1310.8,
   "reason": "Findings consistent with pneumonia. Prioritise clinical assessment and treatment.",
   "heatmap_png": "data:image/png;base64,…",
-  "model_version": "efficientnet_b0",
-  "thresholds": {"confidence": 0.975, "distance": 2849.0, "temperature": 1.293}
+  "model_version": "densenet121@63cd29f2fc9e+gate.c763cb3b",
+  "thresholds": {"confidence": 0.9998, "pneumonia": 0.9998, "normal": 0.0198, "distance": 841.66, "temperature": 0.743}
 }
 ```
 
@@ -327,7 +334,7 @@ backend/firebase.py    Firebase Admin init, Firestore client, ID-token verificat
 scripts/seed_firebase.py  creates specialist/admin accounts
 frontend/index.html    clinician interface (no build step)
 notebooks/             training pipeline (Kaggle notebook with saved outputs)
-models/                gate parameters, gate statistics and EfficientNetB0 weights
+models/                gate parameters, gate statistics and DenseNet121 weights
 results/               model comparison, gate results, charts
 samples/               public test radiographs for trying the app
 docs/                  Figma mockups and screenshots of the running app
@@ -343,6 +350,37 @@ specialist_comment) and `audit_logs` (prediction_id, action, timestamp, user_id)
 
 
 
+## Offline clinic mode
+
+For clinics with unreliable internet, run the server on a computer inside the clinic in
+offline mode. Clinicians open it from that computer (or from other devices on the clinic
+network) and keep working when the internet drops:
+
+```
+set PNEUMOSCAN_OFFLINE=1          # PowerShell: $env:PNEUMOSCAN_OFFLINE="1"
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+| Works without internet | Needs internet |
+|---|---|
+| Scanning, DenseNet121 triage, heatmaps, PDF reports | Creating accounts, emailed codes, password reset |
+| Patients, history, referrals and messages within the clinic | Reaching specialists on the hosted server |
+| Sign-in for accounts that signed in online on this computer before | First sign-in of an account on this computer |
+
+- **Local store:** every record is kept in `data/clinic.db` (SQLite; set `PNEUMOSCAN_LOCAL_DB`
+  to move it) and every change is queued. When the internet returns, the queue is replayed to
+  Firestore in order and changes made elsewhere are copied back (`backend/localstore.py`).
+  If the same record was changed in both places while offline, the last write wins.
+- **Offline sign-in:** after an online sign-in, the server keeps a salted PBKDF2 hash of the
+  password on this computer only (never synced) and issues a 12-hour clinic session. Without
+  internet the same password works, plus an authenticator-app or recovery code if two-factor
+  is on (emailed codes cannot arrive offline).
+- **Status:** the top bar shows Online, Syncing or Offline with the number of changes
+  waiting. Urgent-referral emails that fail while offline are sent when the connection returns.
+- **App shell:** the pages, scripts and fonts are served from the server (no CDN) and cached
+  by a service worker, so the app can be installed from the browser. Browsers only allow
+  service workers on `localhost` or HTTPS, so use HTTPS for other devices on the network.
+
 ## Deployment plan
 
 **Now: local.** Uvicorn on a laptop, Firebase (Auth + Firestore), CPU inference. Enough for
@@ -354,7 +392,7 @@ This is what remote usability participants would use.
 
 **Later: facility deployment.** The design assumption is that connectivity in a
 district hospital cannot be relied on, so inference runs on-device. The
-EfficientNetB0 weights are about 16 MB, and the target is a decision in under 5
+DenseNet121 weights are about 28 MB, and the target is a decision in under 5
 seconds on CPU (to be measured). Decisions sync when a connection is available.
 This stage requires ethics approval, local validation on Rwandan radiographs, and
 clinicians shaping the workflow before it is built into one.
@@ -426,7 +464,7 @@ pneumoscan/
 ├── frontend/            # User interface
 │   └── index.html       # Single-page application with login, dashboard, history
 ├── models/              # Trained model files
-│   ├── efficientnet_b0.pt       # EfficientNetB0 weights (16MB)
+│   ├── densenet121.pt           # DenseNet121 weights (28MB)
 │   ├── gate_params.json         # Gate configuration
 │   └── gate_stats.npz           # OOD detection statistics (13MB)
 ├── samples/             # Test images for demonstration
