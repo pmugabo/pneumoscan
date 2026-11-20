@@ -44,6 +44,12 @@ try:
 except ImportError:  # the UI still runs without torch installed
     TORCH = False
 
+try:
+    import onnxruntime as ort
+    ONNX = True
+except ImportError:
+    ONNX = False
+
 
 @dataclass
 class TriageResult:
@@ -74,6 +80,8 @@ class Engine:
         self.precision = None
         self.weights_sha256 = None
         self.gate_sha256 = None
+        self.runtime = "none"
+        self.session = None
         self._load()
 
     @staticmethod
@@ -99,24 +107,39 @@ class Engine:
     def _load(self):
         gate_file = self.dir / "gate_params.json"
         stats_file = self.dir / "gate_stats.npz"
-        if not (TORCH and gate_file.exists()):
-            print("[engine] DEMO MODE — no gate_params.json or torch unavailable")
+        if not gate_file.exists():
+            print("[engine] DEMO MODE — no gate_params.json")
             return
 
         self.gate = json.loads(gate_file.read_text())
         self.arch = self.gate.get("selected_model", "resnet50")
         weights = self.dir / f"{self.arch}.pt"
-        if not weights.exists():
-            print(f"[engine] DEMO MODE — {weights.name} not found")
+        onnx_file = self.dir / f"{self.arch}.onnx"
+        onnx_meta = self.dir / f"{self.arch}.onnx.json"
+        if TORCH and weights.exists():
+            self.weights_sha256 = self._sha256(weights)
+            self.model = self._build(self.arch)
+            state = torch.load(weights, map_location="cpu", weights_only=True)
+            self.model.load_state_dict(state)
+            self.model.eval()
+            self.runtime = "torch"
+        elif ONNX and onnx_file.exists() and onnx_meta.exists():
+            # Same weights exported by scripts/export_onnx.py; the version string keeps
+            # the hash of the source .pt so records stay traceable to the trained model.
+            meta = json.loads(onnx_meta.read_text())
+            self.weights_sha256 = meta["source_weights_sha256"]
+            self.cls_w = np.asarray(meta["classifier_weight"], dtype=np.float32)
+            self.cls_b = float(meta["classifier_bias"])
+            opts = ort.SessionOptions()
+            opts.intra_op_num_threads = 1
+            self.session = ort.InferenceSession(str(onnx_file), opts,
+                                                providers=["CPUExecutionProvider"])
+            self.runtime = "onnx"
+        else:
+            print(f"[engine] DEMO MODE — no usable weights for {self.arch}")
             return
 
-        self.weights_sha256 = self._sha256(weights)
         self.gate_sha256 = self._sha256(gate_file)
-        self.model = self._build(self.arch)
-        state = torch.load(weights, map_location="cpu", weights_only=True)
-        self.model.load_state_dict(state)
-        self.model.eval()
-
         if stats_file.exists():
             st = np.load(stats_file)
             self.means = st["class_means"]
@@ -124,7 +147,7 @@ class Engine:
 
         self.demo = False
         t_pneu, t_norm = self.thresholds()
-        print(f"[engine] loaded {self.arch}  T={self.gate['temperature']:.3f}  "
+        print(f"[engine] loaded {self.arch} ({self.runtime})  T={self.gate['temperature']:.3f}  "
               f"pneumonia>={t_pneu:.3f}  normal<={t_norm:.3f}  "
               f"dist<={self.gate['distance_threshold']:.1f}")
 
@@ -201,14 +224,10 @@ class Engine:
             return self._demo_result()
 
         rgb, batch = self.preprocess(img)
-        x = torch.tensor(batch)
-
-        act, logit, feat = self._forward(x)
-        grad = torch.autograd.grad(logit.sum(), act)[0]
-        feat = feat.detach().numpy()
+        act, logit, feat, cam_w = self._run(batch)
 
         T = self.gate["temperature"]
-        prob = float(torch.sigmoid(logit / T).item())
+        prob = float(1.0 / (1.0 + np.exp(-logit / T)))
         conf = prob if prob >= 0.5 else 1 - prob
 
         dist = self.mahalanobis(feat)
@@ -238,10 +257,9 @@ class Engine:
                       "No pneumonia detected. No specialist review required.")
         heat = None
         if state != "REJECTED":
-            w = grad.mean(dim=(2, 3), keepdim=True)
-            cam = F.relu((w * act).sum(1, keepdim=True))
-            cam = F.interpolate(cam, (IMG_SIZE, IMG_SIZE), mode="bilinear",
-                                align_corners=False)[0, 0].detach().numpy()
+            cam = np.maximum((cam_w[:, None, None] * act).sum(0), 0).astype(np.float32)
+            cam = np.asarray(Image.fromarray(cam, mode="F").resize(
+                (IMG_SIZE, IMG_SIZE), Image.BILINEAR))
             cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
             heat = self.overlay(rgb, cam)
 
@@ -254,6 +272,19 @@ class Engine:
                         "distance": None if not np.isfinite(dist_thr) else dist_thr,
                         "temperature": T},
             demo_mode=False)
+
+    def _run(self, batch: np.ndarray):
+        """Returns (feature map CxHxW, logit, embedding, Grad-CAM channel weights)."""
+        if self.runtime == "onnx":
+            act, logit, emb = self.session.run(None, {"x": batch.astype(np.float32)})
+            act = act[0]
+            # DenseNet's head is linear on the average-pooled map, so the Grad-CAM weight
+            # (mean gradient of the logit over each channel) is that channel's weight / HW.
+            return act, float(logit.ravel()[0]), emb, self.cls_w / (act.shape[1] * act.shape[2])
+        act, logit, emb = self._forward(torch.tensor(batch))
+        grad = torch.autograd.grad(logit.sum(), act)[0]
+        w = grad.mean(dim=(2, 3))[0].numpy()
+        return (act[0].detach().numpy(), float(logit.item()), emb.detach().numpy(), w)
 
     def thresholds(self) -> tuple[float, float]:
         """(pneumonia, normal) probability cut-offs. Older gate files had one symmetric
@@ -277,7 +308,8 @@ class Engine:
         """JSON-safe: non-finite thresholds become null rather than inf."""
         gate = {k: (None if isinstance(v, float) and not np.isfinite(v) else v)
                 for k, v in self.gate.items()}
-        return {"demo_mode": self.demo, "architecture": self.arch, "gate": gate,
+        return {"demo_mode": self.demo, "architecture": self.arch, "runtime": self.runtime,
+                "gate": gate,
                 "model_version": self.version, "weights_sha256": self.weights_sha256,
                 "gate_sha256": self.gate_sha256,
                 "states": ["CLEARED", "FLAGGED_URGENT", "ESCALATED", "REJECTED"]}
