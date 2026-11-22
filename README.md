@@ -110,22 +110,22 @@ artefacts are kept in `models/archive/efficientnet_b0/` for reproducibility.
 
 **Confidence gate, DenseNet121 (deployed):**
 
-| | All 618 images | Accepted only (419) |
+| | All 618 images | Accepted only (375) |
 |---|---|---|
 | Sensitivity | 0.997 | **1.000** |
-| Specificity | 0.654 | 0.851 |
+| Specificity | 0.654 | 0.720 |
 
-Autonomy rate **67.8%**: 419 of 618 resolved without escalation (80 cleared, 339 flagged
-urgent), 157 escalated for low confidence, 42 rejected as out of distribution. No
+Autonomy rate **60.7%**: 375 of 618 resolved without escalation (36 cleared, 339 flagged
+urgent), 201 escalated for low confidence, 42 rejected as out of distribution. No
 pneumonia case was cleared. The gate buys sensitivity at
 the cost of specificity, which is the intended trade in a screening setting: a
 missed pneumonia is the dangerous error, an unnecessary review is not.
 
-The notebook's symmetric gate cleared a case only when P(pneumonia) <= 0.0002, which
-cleared 36 children and escalated 201. `scripts/retune_gate.py` refits only the normal
-side on the held-out `sel` and `cal` development splits (no retraining): the highest
-cut-off that clears no in-distribution pneumonia there is P <= 0.0198. Temperature,
-distance threshold and the pneumonia cut-off are unchanged from the notebook.
+This is the gate exactly as the v2 notebook fitted and evaluated it
+(`results/v2/gate_params.json`): `backend/inference.py` gives the same triage state as
+the notebook's `results/v2/gate_decisions_test.csv` on all 618 test images. A post-hoc
+re-tuning of the normal cut-off is kept separately on the
+[`gate-retuning`](https://github.com/pmugabo/pneumoscan/tree/gate-retuning) branch.
 
 Not yet measured: gate behaviour on genuinely out-of-distribution inputs (adult,
 degraded, non-chest images).
@@ -305,7 +305,7 @@ Example response (values illustrative):
   "reason": "Findings consistent with pneumonia. Prioritise clinical assessment and treatment.",
   "heatmap_png": "data:image/png;base64,…",
   "model_version": "densenet121@63cd29f2fc9e+gate.c763cb3b",
-  "thresholds": {"confidence": 0.9998, "pneumonia": 0.9998, "normal": 0.0198, "distance": 841.66, "temperature": 0.743}
+  "thresholds": {"confidence": 0.9998, "pneumonia": 0.9998, "normal": 0.0002, "distance": 841.66, "temperature": 0.743}
 }
 ```
 

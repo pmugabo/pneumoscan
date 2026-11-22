@@ -15,78 +15,27 @@
     "fn": 1
   },
   "gated_accepted_only": {
+    "n": 375,
     "sensitivity": 1.0,
-    "specificity": 0.851063829787234,
+    "specificity": 0.72,
     "precision": 0.9587020648967551,
-    "npv": 1.0,
-    "accuracy": 0.9665871121718377,
     "f1": 0.9789156626506024,
+    "accuracy": 0.9626666666666667,
     "tp": 325,
-    "tn": 80,
+    "tn": 36,
     "fp": 14,
     "fn": 0,
-    "n": 419
+    "npv": 1.0
   },
-  "accepted": 419,
-  "escalated_low_confidence": 157,
+  "accepted": 375,
+  "escalated_low_confidence": 201,
   "rejected_out_of_distribution": 42,
-  "autonomy_rate": 0.6779935275080906,
+  "autonomy_rate": 0.6067961165048543,
   "final_states": {
-    "CLEARED": 80,
+    "CLEARED": 36,
     "FLAGGED_URGENT": 339,
-    "ESCALATED": 157,
+    "ESCALATED": 201,
     "REJECTED": 42
   },
-  "source": "results/v2 (notebook v2), reproduced with backend/inference.py on the 618-image test set",
-  "notebook_symmetric_gate": {
-    "gated_accepted_only": {
-      "n": 375,
-      "threshold": null,
-      "sensitivity": 1.0,
-      "specificity": 0.72,
-      "precision": 0.9587020648967551,
-      "f1": 0.9789156626506024,
-      "accuracy": 0.9626666666666667,
-      "auc": 0.9455076923076923,
-      "tp": 325,
-      "tn": 36,
-      "fp": 14,
-      "fn": 0,
-      "npv": 1.0,
-      "rule": "pneumonia if p >= confidence_threshold, normal if p <= 1 - confidence_threshold"
-    },
-    "accepted": 375,
-    "escalated_low_confidence": 201,
-    "rejected_out_of_distribution": 42,
-    "autonomy_rate": 0.6067961165048543,
-    "final_states": {
-      "FLAGGED_URGENT": 339,
-      "REJECTED": 42,
-      "ESCALATED": 201,
-      "CLEARED": 36
-    }
-  },
-  "development_two_sided_gate": {
-    "n": 1346,
-    "accepted": 1074,
-    "escalated_low_confidence": 188,
-    "rejected_out_of_distribution": 84,
-    "autonomy_rate": 0.7979197622585439,
-    "final_states": {
-      "CLEARED": 298,
-      "FLAGGED_URGENT": 776,
-      "ESCALATED": 188,
-      "REJECTED": 84
-    },
-    "sensitivity": 1.0,
-    "specificity": 1.0,
-    "precision": 1.0,
-    "npv": 1.0,
-    "accuracy": 1.0,
-    "f1": 1.0,
-    "tp": 776,
-    "tn": 298,
-    "fp": 0,
-    "fn": 0
-  }
+  "source": "results/v2 (notebook v2) gate, reproduced with backend/inference.py on the 618-image test set (same state on 618/618 images)"
 }
