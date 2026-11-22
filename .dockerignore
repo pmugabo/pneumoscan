@@ -1,0 +1,14 @@
+.git
+.venv
+data
+docs
+notebooks
+tests
+results/v2
+**/__pycache__
+models/*.pt
+models/archive
+models/*copy*
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
+firebase-web-config.json
